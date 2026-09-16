@@ -109,6 +109,20 @@
   }
   .toggle{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-soft); }
   .toggle input{ accent-color:var(--real); }
+  .toggle select, .toggle input[type=date]{
+    border:1px solid var(--line); border-radius:4px; background:var(--paper-panel);
+    color:var(--ink); font-size:12px; padding:3px 6px;
+  }
+  .view-tabs{ display:flex; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
+  .view-tab{
+    border:1px solid var(--line); background:var(--paper-panel); color:var(--ink-soft);
+    font-size:12.5px; padding:6px 12px; border-radius:4px 4px 0 0; cursor:pointer;
+    font-family:inherit;
+  }
+  .view-tab:hover{ background:var(--hover); }
+  .view-tab.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .diff-pos{ fill:var(--nominal); }
+  .diff-neg{ fill:var(--cutover); }
   .chart-wrap{
     background:var(--paper-panel);
     border:1px solid var(--line);
@@ -156,7 +170,21 @@
     </aside>
 
     <main>
-      <div class="controls">
+      <div class="view-tabs" id="viewTabs">
+        <button class="view-tab active" data-view="timeseries">Time Series</button>
+        <button class="view-tab" data-view="snapshot">Curve Snapshot</button>
+        <button class="view-tab" data-view="change">Curve Change</button>
+        <button class="view-tab" data-view="steepness">Curve Steepness</button>
+      </div>
+
+      <div class="controls" id="controls-timeseries">
+        <label class="toggle">
+          Show:
+          <select id="fieldSelect">
+            <option value="yield">Yield</option>
+            <option value="dirty_price">Dirty price</option>
+          </select>
+        </label>
         <label class="toggle"><input type="checkbox" id="showNominalCurve"> Overlay BoE nominal curve</label>
         <label class="toggle"><input type="checkbox" id="showRealCurve"> Overlay BoE real curve</label>
         <label class="toggle">
@@ -164,8 +192,38 @@
           <select id="maturitySelect"></select>
         </label>
       </div>
+
+      <div class="controls" id="controls-snapshot" style="display:none;">
+        <label class="toggle">Date: <input type="date" id="snapshotDate"></label>
+        <label class="toggle">Curve: <select id="snapshotCurveType">
+          <option value="nominal">Nominal</option>
+          <option value="real">Real</option>
+        </select></label>
+      </div>
+
+      <div class="controls" id="controls-change" style="display:none;">
+        <label class="toggle">From: <input type="date" id="changeDateA"></label>
+        <label class="toggle">To: <input type="date" id="changeDateB"></label>
+        <label class="toggle">Curve: <select id="changeCurveType">
+          <option value="nominal">Nominal</option>
+          <option value="real">Real</option>
+        </select></label>
+        <label class="toggle"><input type="checkbox" id="showDiffPanel" checked> Show change (bps) panel</label>
+      </div>
+
+      <div class="controls" id="controls-steepness" style="display:none;">
+        <label class="toggle">Curve: <select id="steepnessCurveType">
+          <option value="nominal">Nominal</option>
+          <option value="real">Real</option>
+        </select></label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="2,10" checked> 2s10s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,20" checked> 10s20s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="20,30" checked> 20s30s</label>
+      </div>
+
       <div class="chart-wrap">
         <svg id="chart" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
+        <svg id="chart2" viewBox="0 0 900 160" preserveAspectRatio="xMidYMid meet" style="display:none; margin-top:8px;"></svg>
         <div class="legend" id="legend"></div>
       </div>
     </main>
@@ -209,11 +267,12 @@ const SAMPLE_DATA = {
 
 function genSeries(start,end,base,drift,noise){
   const out=[]; let d=new Date(start); const e=new Date(end);
-  let v=base;
+  let v=base, price=100 - base*2;
   while(d<=e){
     if(d.getDay()!==0 && d.getDay()!==6 && d.getDate()%9===0){
       v += (Math.random()-0.5)*noise + drift*0.01;
-      out.push({date:d.toISOString().slice(0,10), yield: +v.toFixed(3)});
+      price += (Math.random()-0.5)*0.4 - drift*0.05;
+      out.push({date:d.toISOString().slice(0,10), yield: +v.toFixed(3), dirty_price: +price.toFixed(3)});
     }
     d.setDate(d.getDate()+1);
   }
@@ -234,7 +293,7 @@ function genCurve(start,end,maturities,base,noise){
   return out;
 }
 
-const state = { data:null, selected:new Set(), maturity:10 };
+const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield' };
 
 async function loadData(){
   try{
@@ -252,6 +311,7 @@ async function loadData(){
   }
   buildSecurityList();
   buildMaturityOptions();
+  initDateInputs();
   // pre-select first two securities
   state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
   render();
@@ -297,6 +357,99 @@ function buildMaturityOptions(){
   sel.addEventListener('change', ()=>{ state.maturity = +sel.value; render(); });
 }
 
+function curveDateRange(){
+  const dates = state.data.curves.nominal.map(r=>r.date);
+  if(!dates.length) return null;
+  return { min: dates.reduce((a,b)=>a<b?a:b), max: dates.reduce((a,b)=>a>b?a:b) };
+}
+
+function initDateInputs(){
+  const range = curveDateRange();
+  if(!range) return;
+  const snap = document.getElementById('snapshotDate');
+  const a = document.getElementById('changeDateA');
+  const b = document.getElementById('changeDateB');
+  [snap,a,b].forEach(el=>{ el.min = range.min; el.max = range.max; });
+  snap.value = range.max;
+  a.value = range.min;
+  b.value = range.max;
+}
+
+// ---- shared chart helpers -------------------------------------------------
+
+function emptyState(W,H,msg){
+  return `<foreignObject x="0" y="0" width="${W}" height="${H}">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="empty-state">${msg}</div></foreignObject>`;
+}
+
+function drawYAxis(svgParts, M, W, yLo, yHi, plotH, fmt, steps=5){
+  for(let i=0;i<=steps;i++){
+    const v = yLo + (yHi-yLo)*i/steps;
+    const yy = M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+    svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}"/>`);
+    svgParts.push(`<text class="axis" x="${M.left-8}" y="${yy+3}" text-anchor="end">${fmt(v)}</text>`);
+  }
+}
+
+function drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x){
+  const startYear = new Date(xMin).getFullYear();
+  const endYear = new Date(xMax).getFullYear();
+  for(let yr=startYear; yr<=endYear; yr+= Math.max(1,Math.round((endYear-startYear)/9))){
+    const t = +new Date(`${yr}-01-01`);
+    if(t<xMin||t>xMax) continue;
+    const xx = x(t);
+    svgParts.push(`<line class="gridline" x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
+    svgParts.push(`<text class="axis" x="${xx}" y="${H-8}" text-anchor="middle">${yr}</text>`);
+  }
+}
+
+function drawXAxisMaturity(svgParts, M, H, plotH, x, maturities){
+  maturities.forEach(m=>{
+    const xx = x(m);
+    svgParts.push(`<line class="gridline" x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
+    svgParts.push(`<text class="axis" x="${xx}" y="${H-8}" text-anchor="middle">${m}y</text>`);
+  });
+}
+
+function curveByDateMap(curveArray){
+  const map = new Map();
+  curveArray.forEach(r=>{
+    if(!map.has(r.date)) map.set(r.date, {});
+    map.get(r.date)[r.maturity_years] = r.rate_pct;
+  });
+  return map;
+}
+
+function nearestAvailableDate(curveArray, target){
+  const dates = [...new Set(curveArray.map(r=>r.date))];
+  if(!dates.length) return null;
+  const t = +new Date(target);
+  let best=dates[0], bestDiff=Math.abs(+new Date(dates[0])-t);
+  dates.forEach(d=>{
+    const diff = Math.abs(+new Date(d)-t);
+    if(diff<bestDiff){ bestDiff=diff; best=d; }
+  });
+  return best;
+}
+
+function curveOnDate(curveArray, date){
+  return curveArray.filter(r=>r.date===date).sort((a,b)=>a.maturity_years-b.maturity_years);
+}
+
+// ---- view tab wiring --------------------------------------------------
+
+document.querySelectorAll('.view-tab').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.view-tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.view = btn.dataset.view;
+    ['timeseries','snapshot','change','steepness'].forEach(v=>{
+      document.getElementById('controls-'+v).style.display = (v===state.view) ? 'flex' : 'none';
+    });
+    render();
+  });
+});
+
 document.getElementById('search').addEventListener('input', (e)=>{
   const q = e.target.value.toLowerCase();
   document.querySelectorAll('.sec-item').forEach(el=>{
@@ -304,38 +457,61 @@ document.getElementById('search').addEventListener('input', (e)=>{
     el.style.display = match ? 'flex' : 'none';
   });
 });
+document.getElementById('fieldSelect').addEventListener('change', e=>{ state.field = e.target.value; render(); });
 document.getElementById('showNominalCurve').addEventListener('change', render);
 document.getElementById('showRealCurve').addEventListener('change', render);
+document.getElementById('snapshotDate').addEventListener('change', render);
+document.getElementById('snapshotCurveType').addEventListener('change', render);
+document.getElementById('changeDateA').addEventListener('change', render);
+document.getElementById('changeDateB').addEventListener('change', render);
+document.getElementById('changeCurveType').addEventListener('change', render);
+document.getElementById('showDiffPanel').addEventListener('change', render);
+document.getElementById('steepnessCurveType').addEventListener('change', render);
+document.querySelectorAll('.spread-toggle').forEach(cb=>cb.addEventListener('change', render));
+
+// ---- render dispatch ----------------------------------------------------
 
 function render(){
+  if(!state.data) return;
+  if(state.view!=='change'){ document.getElementById('chart2').style.display='none'; }
+  if(state.view==='timeseries') renderTimeSeries();
+  else if(state.view==='snapshot') renderCurveSnapshot();
+  else if(state.view==='change') renderCurveChange();
+  else if(state.view==='steepness') renderSteepness();
+}
+
+function renderTimeSeries(){
   const svg = document.getElementById('chart');
   const legend = document.getElementById('legend');
   const W=900,H=420,M={top:16,right:20,bottom:28,left:44};
   const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
 
+  const field = state.field;
   const selectedSecs = state.data.securities.filter(s=>state.selected.has(s.isin));
   const showNom = document.getElementById('showNominalCurve').checked;
   const showReal = document.getElementById('showRealCurve').checked;
 
   let allPoints = [];
-  selectedSecs.forEach(s=> s.series.forEach(p=>allPoints.push({date:p.date, val:p.yield})));
+  selectedSecs.forEach(s=> s.series.forEach(p=>{
+    const v = p[field];
+    if(v===undefined || v===null) return;
+    allPoints.push({date:p.date, val:v});
+  }));
   let curveNom=[], curveReal=[];
-  if(showNom){
+  if(field==='yield' && showNom){
     curveNom = state.data.curves.nominal.filter(r=>r.maturity_years===state.maturity);
     curveNom.forEach(p=>allPoints.push({date:p.date, val:p.rate_pct}));
   }
-  if(showReal){
+  if(field==='yield' && showReal){
     curveReal = state.data.curves.real.filter(r=>r.maturity_years===state.maturity);
     curveReal.forEach(p=>allPoints.push({date:p.date, val:p.rate_pct}));
   }
 
   if(!allPoints.length){
-    svg.innerHTML = `<foreignObject x="0" y="0" width="${W}" height="${H}">
-      <div xmlns="http://www.w3.org/1999/xhtml" class="empty-state">
-        Select a security on the left, or enable a BoE curve overlay, to see the chart.
-      </div></foreignObject>`;
-    legend.innerHTML='';
-    return;
+    svg.innerHTML = emptyState(W,H, field==='dirty_price'
+      ? 'No dirty price data for the current selection (curve overlays only apply to yield).'
+      : 'Select a security on the left, or enable a BoE curve overlay, to see the chart.');
+    legend.innerHTML=''; return;
   }
 
   const dates = allPoints.map(p=>+new Date(p.date));
@@ -349,28 +525,9 @@ function render(){
   const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
 
   let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>field==='yield' ? v.toFixed(1)+'%' : v.toFixed(2));
+  drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x);
 
-  // gridlines + y axis
-  const ySteps=5;
-  for(let i=0;i<=ySteps;i++){
-    const v = yLo + (yHi-yLo)*i/ySteps;
-    const yy = y(v);
-    svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}"/>`);
-    svgParts.push(`<text class="axis" x="${M.left-8}" y="${yy+3}" text-anchor="end">${v.toFixed(1)}%</text>`);
-  }
-
-  // x axis (years)
-  const startYear = new Date(xMin).getFullYear();
-  const endYear = new Date(xMax).getFullYear();
-  for(let yr=startYear; yr<=endYear; yr+= Math.max(1,Math.round((endYear-startYear)/9))){
-    const t = +new Date(`${yr}-01-01`);
-    if(t<xMin||t>xMax) continue;
-    const xx = x(t);
-    svgParts.push(`<line class="gridline" x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
-    svgParts.push(`<text class="axis" x="${xx}" y="${H-8}" text-anchor="middle">${yr}</text>`);
-  }
-
-  // cutover marker
   const cutoverT = +new Date(state.data.cutover_date);
   if(cutoverT>=xMin && cutoverT<=xMax){
     const cx = x(cutoverT);
@@ -378,33 +535,231 @@ function render(){
     svgParts.push(`<text class="cutover-label" x="${cx+4}" y="${M.top+10}">DMO series ends</text>`);
   }
 
-  // security lines
   selectedSecs.forEach(s=>{
     const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
-    const pts = s.series.map(p=>`${x(+new Date(p.date))},${y(p.yield)}`).join(' ');
-    svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
+    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null)
+      .map(p=>`${x(+new Date(p.date))},${y(p[field])}`).join(' ');
+    if(pts) svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
   });
 
-  // curve overlays
-  if(showNom && curveNom.length){
+  if(field==='yield' && showNom && curveNom.length){
     const pts = curveNom.map(p=>`${x(+new Date(p.date))},${y(p.rate_pct)}`).join(' ');
     svgParts.push(`<polyline class="curve-line" points="${pts}" stroke="${COLORS[0]}"/>`);
   }
-  if(showReal && curveReal.length){
+  if(field==='yield' && showReal && curveReal.length){
     const pts = curveReal.map(p=>`${x(+new Date(p.date))},${y(p.rate_pct)}`).join(' ');
     svgParts.push(`<polyline class="curve-line" points="${pts}" stroke="${COLORS[1]}"/>`);
   }
 
   svg.innerHTML = svgParts.join('');
 
-  // legend
   let legendHtml = selectedSecs.map(s=>{
     const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
     return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.name}</span>`;
   }).join('');
-  if(showNom) legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[0]};border-top:2px dotted ${COLORS[0]}"></span>BoE nominal ${state.maturity}y (curve)</span>`;
-  if(showReal) legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[1]};border-top:2px dotted ${COLORS[1]}"></span>BoE real ${state.maturity}y (curve)</span>`;
+  if(field==='yield' && showNom) legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[0]};border-top:2px dotted ${COLORS[0]}"></span>BoE nominal ${state.maturity}y (curve)</span>`;
+  if(field==='yield' && showReal) legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[1]};border-top:2px dotted ${COLORS[1]}"></span>BoE real ${state.maturity}y (curve)</span>`;
   legend.innerHTML = legendHtml;
+}
+
+function renderCurveSnapshot(){
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:44};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const curveType = document.getElementById('snapshotCurveType').value;
+  const wanted = document.getElementById('snapshotDate').value;
+  const curveArr = state.data.curves[curveType];
+  if(!curveArr || !curveArr.length || !wanted){
+    svg.innerHTML = emptyState(W,H,'No curve data available.');
+    legend.innerHTML=''; return;
+  }
+  const actualDate = nearestAvailableDate(curveArr, wanted);
+  const pts = curveOnDate(curveArr, actualDate);
+  if(!pts.length){
+    svg.innerHTML = emptyState(W,H,'No curve points for this date.');
+    legend.innerHTML=''; return;
+  }
+
+  const maturities = pts.map(p=>p.maturity_years);
+  const rates = pts.map(p=>p.rate_pct);
+  const xMin=Math.min(...maturities), xMax=Math.max(...maturities);
+  const yMin=Math.min(...rates), yMax=Math.max(...rates);
+  const yPad=(yMax-yMin)*0.15 || 0.5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = m => M.left + (m-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(2)+'%');
+  drawXAxisMaturity(svgParts, M, H, plotH, x, maturities);
+
+  const color = curveType==='nominal' ? COLORS[0] : COLORS[1];
+  const linePts = pts.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
+  svgParts.push(`<polyline class="series-line" points="${linePts}" stroke="${color}"/>`);
+  pts.forEach(p=>{
+    svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${color}"/>`);
+  });
+
+  svg.innerHTML = svgParts.join('');
+  const dateNote = actualDate===wanted ? actualDate : `${actualDate} (nearest available to ${wanted})`;
+  legend.innerHTML = `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${curveType==='nominal'?'Nominal':'Real'} curve — ${dateNote}</span>`;
+}
+
+function renderCurveChange(){
+  const svg = document.getElementById('chart');
+  const chart2 = document.getElementById('chart2');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:44};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const curveType = document.getElementById('changeCurveType').value;
+  const wantedA = document.getElementById('changeDateA').value;
+  const wantedB = document.getElementById('changeDateB').value;
+  const showDiff = document.getElementById('showDiffPanel').checked;
+  const curveArr = state.data.curves[curveType];
+
+  if(!curveArr || !curveArr.length || !wantedA || !wantedB){
+    svg.innerHTML = emptyState(W,H,'No curve data available.');
+    chart2.style.display='none'; legend.innerHTML=''; return;
+  }
+
+  const dateA = nearestAvailableDate(curveArr, wantedA);
+  const dateB = nearestAvailableDate(curveArr, wantedB);
+  const ptsA = curveOnDate(curveArr, dateA);
+  const ptsB = curveOnDate(curveArr, dateB);
+
+  if(!ptsA.length || !ptsB.length){
+    svg.innerHTML = emptyState(W,H,'No curve points for one or both dates.');
+    chart2.style.display='none'; legend.innerHTML=''; return;
+  }
+
+  const allMaturities = [...new Set([...ptsA.map(p=>p.maturity_years), ...ptsB.map(p=>p.maturity_years)])].sort((a,b)=>a-b);
+  const allRates = [...ptsA.map(p=>p.rate_pct), ...ptsB.map(p=>p.rate_pct)];
+  const xMin=Math.min(...allMaturities), xMax=Math.max(...allMaturities);
+  const yMin=Math.min(...allRates), yMax=Math.max(...allRates);
+  const yPad=(yMax-yMin)*0.15 || 0.5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = m => M.left + (m-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(2)+'%');
+  drawXAxisMaturity(svgParts, M, H, plotH, x, allMaturities);
+
+  const colorA = COLORS[0], colorB = COLORS[4];
+  const lineA = ptsA.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
+  const lineB = ptsB.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
+  svgParts.push(`<polyline class="series-line" points="${lineA}" stroke="${colorA}"/>`);
+  svgParts.push(`<polyline class="series-line" points="${lineB}" stroke="${colorB}"/>`);
+  ptsA.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorA}"/>`));
+  ptsB.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorB}"/>`));
+
+  svg.innerHTML = svgParts.join('');
+
+  let legendHtml = `<span class="legend-item"><span class="legend-swatch" style="background:${colorA}"></span>${dateA}</span>`+
+    `<span class="legend-item"><span class="legend-swatch" style="background:${colorB}"></span>${dateB}</span>`;
+
+  if(showDiff){
+    chart2.style.display='block';
+    const mapA = Object.fromEntries(ptsA.map(p=>[p.maturity_years,p.rate_pct]));
+    const mapB = Object.fromEntries(ptsB.map(p=>[p.maturity_years,p.rate_pct]));
+    const diffs = allMaturities
+      .filter(m=>mapA[m]!==undefined && mapB[m]!==undefined)
+      .map(m=>({maturity:m, bps:(mapB[m]-mapA[m])*100}));
+
+    const W2=900,H2=160,M2={top:10,right:20,bottom:24,left:44};
+    const plotW2=W2-M2.left-M2.right, plotH2=H2-M2.top-M2.bottom;
+    const bpsVals = diffs.map(d=>d.bps);
+    const bMax = Math.max(Math.abs(Math.min(...bpsVals,0)), Math.abs(Math.max(...bpsVals,0)), 1) * 1.2;
+    const x2 = m => M2.left + (m-xMin)/(xMax-xMin||1) * plotW2;
+    const y2 = v => M2.top + plotH2/2 - (v/bMax) * (plotH2/2);
+    let parts2 = [];
+    parts2.push(`<line class="gridline" x1="${M2.left}" x2="${W2-M2.right}" y1="${y2(0)}" y2="${y2(0)}"/>`);
+    parts2.push(`<text class="axis" x="${M2.left-8}" y="${y2(0)+3}" text-anchor="end">0bp</text>`);
+    const barW = Math.max(4, plotW2/Math.max(diffs.length,1)*0.5);
+    diffs.forEach(d=>{
+      const xx = x2(d.maturity);
+      const yy0 = y2(0), yy1 = y2(d.bps);
+      const cls = d.bps>=0 ? 'diff-pos' : 'diff-neg';
+      parts2.push(`<rect class="${cls}" x="${xx-barW/2}" y="${Math.min(yy0,yy1)}" width="${barW}" height="${Math.abs(yy1-yy0)||1}"/>`);
+      parts2.push(`<text class="axis" x="${xx}" y="${H2-6}" text-anchor="middle">${d.maturity}y</text>`);
+    });
+    chart2.innerHTML = parts2.join('');
+    legendHtml += `<span class="legend-item">Bottom panel: change in bps (${dateB} minus ${dateA})</span>`;
+  } else {
+    chart2.style.display='none';
+  }
+
+  legend.innerHTML = legendHtml;
+}
+
+function renderSteepness(){
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:50};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const curveType = document.getElementById('steepnessCurveType').value;
+  const curveArr = state.data.curves[curveType];
+  const pairs = [...document.querySelectorAll('.spread-toggle')]
+    .filter(cb=>cb.checked)
+    .map(cb=>cb.value.split(',').map(Number));
+
+  if(!curveArr || !curveArr.length || !pairs.length){
+    svg.innerHTML = emptyState(W,H,'Select at least one spread to display.');
+    legend.innerHTML=''; return;
+  }
+
+  const byDate = curveByDateMap(curveArr);
+  const series = pairs.map(([shortM,longM])=>{
+    const pts = [];
+    byDate.forEach((rates,date)=>{
+      if(rates[shortM]!==undefined && rates[longM]!==undefined){
+        pts.push({date, bps:(rates[longM]-rates[shortM])*100});
+      }
+    });
+    pts.sort((a,b)=>a.date.localeCompare(b.date));
+    return { label:`${shortM}s${longM}s`, pts };
+  }).filter(s=>s.pts.length);
+
+  if(!series.length){
+    svg.innerHTML = emptyState(W,H,'No overlapping maturity data for the selected spreads.');
+    legend.innerHTML=''; return;
+  }
+
+  const allDates = series.flatMap(s=>s.pts.map(p=>+new Date(p.date)));
+  const allBps = series.flatMap(s=>s.pts.map(p=>p.bps));
+  const xMin=Math.min(...allDates), xMax=Math.max(...allDates);
+  const yMin=Math.min(...allBps,0), yMax=Math.max(...allBps,0);
+  const yPad=(yMax-yMin)*0.1 || 5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = t => M.left + (t-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(0)+'bp');
+  drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x);
+  if(yLo<0 && yHi>0){
+    const yy = y(0);
+    svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}" stroke-width="1.4"/>`);
+  }
+
+  series.forEach((s,i)=>{
+    const color = COLORS[i%COLORS.length];
+    const pts = s.pts.map(p=>`${x(+new Date(p.date))},${y(p.bps)}`).join(' ');
+    svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
+  });
+
+  svg.innerHTML = svgParts.join('');
+  legend.innerHTML = series.map((s,i)=>{
+    const color = COLORS[i%COLORS.length];
+    return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.label} (${curveType})</span>`;
+  }).join('');
 }
 
 loadData();
