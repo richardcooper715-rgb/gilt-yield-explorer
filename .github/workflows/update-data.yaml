@@ -1,0 +1,59 @@
+# Save this file as .github/workflows/update-data.yml in your repo
+# (GitHub Actions only looks for workflow files in that exact folder).
+#
+# What it does:
+#   - Runs automatically every day at 07:00 UTC (after BoE's daily
+#     curve data is normally published), and can also be triggered
+#     manually from the Actions tab any time.
+#   - Re-runs fetch_gilt_data.py, which re-parses the (static, already
+#     committed) DMO files in dmo_raw/ and re-fetches the latest BoE
+#     curve data.
+#   - If gilt_yields.json actually changed, commits and pushes it back
+#     to the repo automatically, so GitHub Pages serves the fresh file
+#     without you doing anything.
+#
+# One-time setup needed in your repo (in addition to this file):
+#   1. Commit fetch_gilt_data.py to the repo root.
+#   2. Commit the dmo_raw/ folder (your manually-downloaded DMO files)
+#      to the repo root -- these are static and only need committing
+#      once, this workflow just reuses them each run.
+
+name: Update gilt yield data
+
+on:
+  schedule:
+    - cron: '0 7 * * *'   # every day at 07:00 UTC
+  workflow_dispatch: {}    # adds a "Run workflow" button in the Actions tab
+
+permissions:
+  contents: write   # needed so the workflow can push the updated file
+
+jobs:
+  update-data:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: pip install requests beautifulsoup4 openpyxl xlrd pandas
+
+      - name: Run data fetch script
+        run: python fetch_gilt_data.py
+
+      - name: Commit and push if data changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- gilt_yields.json; then
+            echo "No changes to gilt_yields.json -- nothing to commit."
+          else
+            git add gilt_yields.json
+            git commit -m "Auto-update gilt yield data ($(date -u +%Y-%m-%d))"
+            git push
+          fi
