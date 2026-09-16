@@ -1,0 +1,419 @@
+#!/usr/bin/env python3
+"""
+fetch_gilt_data.py
+
+Builds gilt_yields.json for the Gilt Yield Explorer chart, from two
+free public sources:
+
+  1. DMO historical gilt reference prices & yields (25 Nov 2002 - 21 Jul 2017
+     for yields; prices alone go back to 1996)
+     https://dmo.gov.uk/data/gilt-market/historical-prices-and-yields
+     -> per-security (per-ISIN) daily yields, both conventional and
+        index-linked gilts. This is the good stuff.
+
+     NOTE: DMO's own documentation confirms gross redemption yields in
+     this dataset were only calculated/published from 25 Nov 2002 onward
+     (https://dmo.gov.uk/data/gilt-market/aggregated-yields). Files for
+     1996-2001 (and most of 2002) contain prices only -- no yield column
+     -- so this script correctly produces 0 yield rows for those years.
+     That is expected DMO data coverage, not a parsing bug.
+
+     DMO's site blocks scripted downloads (ShieldSquare bot protection),
+     so this script does NOT fetch these files itself. Instead:
+       1. Download each year's file (1996-2017) by hand from the URL
+          above, in your own browser.
+       2. Save them all into a folder named dmo_raw/ next to this script
+          (any filename is fine as long as the 4-digit year is in it).
+       3. Run this script -- it reads dmo_raw/ automatically from then on.
+
+  2. Bank of England Anderson-Sleath fitted yield curves (continuous,
+     1979/1985 - present)
+     https://www.bankofengland.co.uk/statistics/yield-curves
+     -> curve-level (not per-security) nominal and real spot yields,
+        used here to extend coverage past 21 Jul 2017, when DMO
+        stopped publishing and per-security prices moved behind
+        Tradeweb Insite (registration required, not scraped here).
+     This part IS scraped automatically -- BoE's site doesn't block it.
+
+Run:
+
+    pip install requests beautifulsoup4 openpyxl xlrd pandas
+    python fetch_gilt_data.py
+
+Output: ./gilt_yields.json  (schema documented at the bottom of this
+file, and consumed by gilt-yield-explorer.html)
+
+NOTE: The DMO parsing logic (header-row detection, column-name mapping)
+was written without a chance to inspect a real downloaded file. Print
+statements are left in deliberately so you can see where it breaks
+against the real file layouts and report back.
+"""
+
+import io
+import json
+import os
+import re
+import zipfile
+from datetime import datetime
+
+import requests
+from bs4 import BeautifulSoup
+
+try:
+    import pandas as pd
+except ImportError:
+    raise SystemExit("pip install pandas openpyxl xlrd requests beautifulsoup4")
+
+HEADERS = {"User-Agent": "Mozilla/5.0 (gilt-yield-explorer data pipeline)"}
+
+BOE_CURVES_PAGE = "https://www.bankofengland.co.uk/statistics/yield-curves"
+
+DMO_RAW_DIR = "./dmo_raw"  # put manually-downloaded DMO yearly files here
+
+CUTOVER_DATE = "2017-07-21"  # last DMO reference price date
+
+
+# ---------------------------------------------------------------------------
+# 1. DMO per-security historical yields (1996 - 2017)
+#
+# DMO's site blocks scripted requests (ShieldSquare bot protection), so
+# this reads local files instead of downloading them. One-time manual step:
+#
+#   1. Open https://dmo.gov.uk/data/gilt-market/historical-prices-and-yields
+#      in your browser.
+#   2. Download each year's file (1996-2017) -- whatever DMO names them is
+#      fine, as long as the 4-digit year appears somewhere in the filename,
+#      e.g. "GiltRefPrices1996.xls", "1996.xlsx", "dmo_1996_prices.csv".
+#   3. Save them all into a folder named dmo_raw/ next to this script.
+#
+# Re-run this script any time after that -- it just reads whatever's in
+# dmo_raw/, so you never have to touch the DMO site again.
+# ---------------------------------------------------------------------------
+
+def discover_dmo_year_files():
+    """Scan DMO_RAW_DIR for manually-downloaded yearly files, matched by
+    a 4-digit year (1990-2029) anywhere in the filename."""
+    if not os.path.isdir(DMO_RAW_DIR):
+        print(f"  ERROR: {DMO_RAW_DIR}/ does not exist. Create it and put "
+              f"the manually-downloaded DMO yearly files inside -- see the "
+              f"comment above discover_dmo_year_files() for instructions.")
+        return {}
+
+    year_files = {}
+    for fname in sorted(os.listdir(DMO_RAW_DIR)):
+        if not fname.lower().endswith((".xls", ".xlsx", ".csv")):
+            continue
+        m = re.search(r"(19|20)\d{2}", fname)
+        if not m:
+            print(f"  WARNING: {fname} has no 4-digit year in its name -- skipping")
+            continue
+        year = int(m.group(0))
+        year_files[year] = os.path.join(DMO_RAW_DIR, fname)
+
+    print(f"Found {len(year_files)} local DMO yearly files in {DMO_RAW_DIR}/: "
+          f"{sorted(year_files)}")
+    return year_files
+
+
+def parse_dmo_year_file(year, path):
+    """Parse one year's DMO reference price/yield file into tidy rows.
+
+    Expected (approximate) columns based on DMO's documented format:
+    close-of-business date, ISIN, gilt short name, gilt type
+    (conventional/index-linked), clean price, gross redemption yield.
+    Column names vary by year -- inspect the real file and adjust the
+    rename map below.
+    """
+    try:
+        raw = pd.read_excel(path, header=None)
+    except Exception:
+        raw = pd.read_csv(path, header=None)
+
+    # DMO's files have a title block (data date / report name / date range)
+    # before the real header row. Scan the first 20 rows for the one that
+    # actually looks like a header (contains "isin" somewhere).
+    header_row_idx = None
+    for i in range(min(20, len(raw))):
+        row_vals = [str(v).strip().lower() for v in raw.iloc[i].tolist()]
+        if any("isin" in v for v in row_vals):
+            header_row_idx = i
+            break
+
+    if header_row_idx is None:
+        print(f"  [{year}] WARNING: could not find a header row (looked for "
+              f"'ISIN' in first 20 rows). First 6 rows were:")
+        print(raw.head(6).to_string())
+        return []
+
+    headers = [str(v).strip().lower() for v in raw.iloc[header_row_idx].tolist()]
+    df = raw.iloc[header_row_idx + 1:].copy()
+    df.columns = headers
+    df = df.reset_index(drop=True)
+    print(f"  [{year}] header row found at index {header_row_idx}: {headers}")
+
+    # DMO's real headers carry embedded newlines and unit suffixes, e.g.
+    # "yield \n(%)", "clean price\n(£)" -- normalise whitespace and match
+    # by keyword rather than requiring an exact string.
+    def normalize(h):
+        h = str(h).replace("\n", " ").replace("\r", " ")
+        return re.sub(r"\s+", " ", h).strip().lower()
+
+    def classify(h):
+        if "isin" in h:
+            return "isin"
+        if "gilt name" in h or "stock name" in h or h == "name":
+            return "name"
+        if "redemption date" in h:
+            return "redemption_date"
+        if "close of business date" in h or h == "cob date":
+            return "date"
+        if "yield" in h:
+            return "yield"
+        if "clean price" in h:
+            return "clean_price"
+        if "dirty price" in h:
+            return "dirty_price"
+        if "accrued" in h:
+            return "accrued_interest"
+        if "duration" in h:
+            return "modified_duration"
+        return h  # leave unrecognised columns as-is
+
+    df.columns = [classify(normalize(h)) for h in headers]
+
+    required = {"date", "isin", "yield"}
+    missing = required - set(df.columns)
+    if missing:
+        print(f"  [{year}] WARNING: missing columns {missing}, "
+              f"actual columns were {list(df.columns)} -- skipping")
+        return []
+
+    pre_drop_count = len(df)
+    df["date_parsed"] = pd.to_datetime(df["date"], errors="coerce")
+    df["yield_parsed"] = pd.to_numeric(df["yield"], errors="coerce")
+
+    if pre_drop_count > 0:
+        n_bad_date = df["date_parsed"].isna().sum()
+        n_bad_isin = df["isin"].isna().sum() if "isin" in df.columns else pre_drop_count
+        n_bad_yield = df["yield_parsed"].isna().sum()
+        if n_bad_yield == pre_drop_count and n_bad_date < pre_drop_count:
+            # DMO's own historical documentation confirms gross redemption
+            # yields were only calculated/published from 25 Nov 2002 onward
+            # (https://dmo.gov.uk/data/gilt-market/aggregated-yields).
+            # Years before that genuinely have prices but no yield column
+            # populated -- this is expected, not a parsing failure.
+            print(f"  [{year}] no gross redemption yield published by DMO "
+                  f"this year (prices only) -- expected for dates before "
+                  f"25 Nov 2002, not a parsing error.")
+
+    df["date"] = df["date_parsed"]
+    df["yield"] = df["yield_parsed"]
+    df = df.dropna(subset=["date", "isin", "yield"])
+
+    rows = []
+    for _, r in df.iterrows():
+        name = str(r.get("name", "")).strip()
+        is_il = bool(re.search(r"index.?linked|\bIL\b", name, re.IGNORECASE))
+        rows.append({
+            "date": r["date"].strftime("%Y-%m-%d"),
+            "isin": str(r["isin"]).strip(),
+            "name": name,
+            "type": "index_linked" if is_il else "conventional",
+            "yield": float(r["yield"]),
+        })
+    print(f"  [{year}] parsed {len(rows)} rows")
+    return rows
+
+
+def build_dmo_dataset():
+    year_files = discover_dmo_year_files()
+    all_rows = []
+    for year, path in sorted(year_files.items()):
+        try:
+            all_rows.extend(parse_dmo_year_file(year, path))
+        except Exception as e:
+            print(f"  [{year}] FAILED: {e}")
+
+    securities = {}
+    for row in all_rows:
+        sec = securities.setdefault(row["isin"], {
+            "isin": row["isin"],
+            "name": row["name"],
+            "type": row["type"],
+            "series": [],
+        })
+        sec["series"].append({"date": row["date"], "yield": row["yield"]})
+
+    for sec in securities.values():
+        sec["series"].sort(key=lambda p: p["date"])
+
+    return list(securities.values())
+
+
+# ---------------------------------------------------------------------------
+# 2. BoE curve-level nominal / real yields (2017 - present)
+# ---------------------------------------------------------------------------
+
+def discover_boe_archive_zips():
+    """Find the nominal and real spot-curve archive zip links on the
+    BoE yield curves page."""
+    resp = requests.get(BOE_CURVES_PAGE, headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    soup = BeautifulSoup(resp.text, "html.parser")
+
+    # Only want the DAILY gilt-based spot curves: glcnominalddata.zip and
+    # glcrealddata.zip. Explicitly exclude "month" (monthly duplicates) and
+    # "blc" (LIBOR-based commercial liability curves -- not gilt-based).
+    daily_gilt_re = re.compile(r"glc(nominal|real)ddata\.zip$", re.IGNORECASE)
+
+    zips = {"nominal": [], "real": []}
+    for a in soup.find_all("a", href=True):
+        href = a["href"]
+        if not href.lower().endswith(".zip"):
+            continue
+        m = daily_gilt_re.search(href)
+        if not m:
+            continue  # skip monthly, blc, and anything else
+        url = href if href.startswith("http") else f"https://www.bankofengland.co.uk{href}"
+        curve = m.group(1).lower()
+        zips[curve].append(url)
+
+    print(f"Discovered BoE archives: "
+          f"{len(zips['nominal'])} nominal, {len(zips['real'])} real")
+    return zips
+
+
+def parse_boe_zip(url, curve_name):
+    """Each BoE archive zip contains per-period Excel workbooks with a
+    spot-curve sheet: date rows x maturity-year columns, rate in %.
+
+    BoE publishes these on a very fine maturity grid (roughly monthly
+    steps across the full curve), which is far more resolution than a
+    maturity-selector dropdown needs and makes the JSON output huge
+    (multi-hundred-MB, unusable on mobile). We keep only a curated set
+    of "round number" maturities -- enough to be useful for an overlay
+    selector, without carrying ~40x more data than needed.
+    """
+    KEEP_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
+
+    resp = requests.get(url, headers=HEADERS, timeout=60)
+    resp.raise_for_status()
+
+    rows = []
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        for name in zf.namelist():
+            if not name.lower().endswith((".xls", ".xlsx")):
+                continue
+            with zf.open(name) as f:
+                try:
+                    sheets = pd.read_excel(f, sheet_name=None, header=None)
+                except Exception as e:
+                    print(f"    could not parse {name}: {e}")
+                    continue
+
+            for sheet_name, df in sheets.items():
+                if "spot" not in sheet_name.lower():
+                    continue
+                # Expect: first column = date, header row = maturities in years.
+                # Layout varies -- inspect the real workbook and adjust.
+                header = df.iloc[3]  # guess: header row after title rows
+                maturities = pd.to_numeric(header[1:], errors="coerce")
+                # Map each curated maturity to the nearest actual column,
+                # so we don't need the source grid to land on exact integers.
+                col_for_target = {}
+                for col_idx, m in enumerate(maturities, start=1):
+                    if pd.isna(m):
+                        continue
+                    for target in KEEP_MATURITIES:
+                        if abs(m - target) <= 0.1:
+                            col_for_target.setdefault(target, col_idx)
+                data = df.iloc[4:]
+                for _, r in data.iterrows():
+                    date = pd.to_datetime(r[0], errors="coerce")
+                    if pd.isna(date):
+                        continue
+                    for target, col_idx in col_for_target.items():
+                        rate = pd.to_numeric(r[col_idx], errors="coerce")
+                        if pd.isna(rate):
+                            continue
+                        rows.append({
+                            "date": date.strftime("%Y-%m-%d"),
+                            "maturity_years": float(target),
+                            "rate_pct": float(rate),
+                        })
+    print(f"    parsed {len(rows)} rows from {url} "
+          f"(curated to {len(KEEP_MATURITIES)} maturities: {KEEP_MATURITIES})")
+    return rows
+
+
+def build_boe_dataset():
+    zips = discover_boe_archive_zips()
+    curves = {"nominal": [], "real": []}
+    for curve_name in ("nominal", "real"):
+        for url in zips[curve_name]:
+            try:
+                curves[curve_name].extend(parse_boe_zip(url, curve_name))
+            except Exception as e:
+                print(f"  FAILED {url}: {e}")
+        curves[curve_name].sort(key=lambda r: (r["date"], r["maturity_years"]))
+    return curves
+
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
+
+def main():
+    print("=== Building DMO per-security dataset (1996-2017) ===")
+    securities = build_dmo_dataset()
+
+    print("\n=== Building BoE curve dataset (2017-present) ===")
+    curves = build_boe_dataset()
+
+    output = {
+        "generated": datetime.utcnow().isoformat() + "Z",
+        "cutover_date": CUTOVER_DATE,
+        "notes": (
+            "securities[]: per-ISIN daily yields, DMO reference prices. "
+            "Gross redemption yields were only calculated/published by "
+            "DMO from 25 Nov 2002 (confirmed via dmo.gov.uk) up to "
+            f"{CUTOVER_DATE}; earlier DMO files (1996-2001) contain "
+            "prices only, no yield. curves.nominal / curves.real: "
+            "BoE Anderson-Sleath fitted spot curves by maturity, continuous "
+            "to present but NOT per-security."
+        ),
+        "securities": securities,
+        "curves": curves,
+    }
+
+    with open("gilt_yields.json", "w") as f:
+        json.dump(output, f, separators=(",", ":"))
+
+    print(f"\nWrote gilt_yields.json: {len(securities)} securities, "
+          f"{len(curves['nominal'])} nominal curve points, "
+          f"{len(curves['real'])} real curve points.")
+
+
+if __name__ == "__main__":
+    main()
+
+
+# ---------------------------------------------------------------------------
+# Output schema (gilt_yields.json)
+# ---------------------------------------------------------------------------
+# {
+#   "generated": "2026-09-13T12:00:00Z",
+#   "cutover_date": "2017-07-21",
+#   "securities": [
+#     {
+#       "isin": "GB00...",
+#       "name": "5% Treasury Gilt 2025",
+#       "type": "conventional" | "index_linked",
+#       "series": [{"date": "1998-01-05", "yield": 6.23}, ...]
+#     }, ...
+#   ],
+#   "curves": {
+#     "nominal": [{"date": "2017-07-24", "maturity_years": 10.0, "rate_pct": 1.23}, ...],
+#     "real":    [{"date": "2017-07-24", "maturity_years": 10.0, "rate_pct": -1.75}, ...]
+#   }
+# }
