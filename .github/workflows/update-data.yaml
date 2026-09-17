@@ -2,12 +2,15 @@
 # (GitHub Actions only looks for workflow files in that exact folder).
 #
 # What it does:
-#   - Runs automatically every day at 07:00 UTC (after BoE's daily
-#     curve data is normally published), and can also be triggered
-#     manually from the Actions tab any time.
-#   - Re-runs fetch_gilt_data.py, which re-parses the (static, already
-#     committed) DMO files in dmo_raw/ and re-fetches the latest BoE
-#     curve data.
+#   - Runs every day at 07:00 UTC with `--only boe-latest`, a fast fetch
+#     of just BoE's daily-updated "latest yield curve data" file -- this
+#     is the only piece that actually changes day to day.
+#   - Runs once a month (3rd, 08:00 UTC) with `--only all`, which also
+#     re-fetches DMO + the BoE monthly archive zips -- this catches any
+#     data revisions BoE makes and keeps everything in sync.
+#   - Can also be triggered manually from the Actions tab any time, with
+#     an optional "only" input if you want to run just one piece
+#     (e.g. "dmo" after adding new dmo_raw/ files, or "boe-archive").
 #   - If gilt_yields.json actually changed, commits and pushes it back
 #     to the repo automatically, so GitHub Pages serves the fresh file
 #     without you doing anything.
@@ -22,8 +25,14 @@ name: Update gilt yield data
 
 on:
   schedule:
-    - cron: '0 7 * * *'   # every day at 07:00 UTC
-  workflow_dispatch: {}    # adds a "Run workflow" button in the Actions tab
+    - cron: '0 7 * * *'     # every day at 07:00 UTC -- fast, latest BoE data only
+    - cron: '0 8 3 * *'     # 3rd of each month -- full run (archive refresh + revisions)
+  workflow_dispatch:
+    inputs:
+      only:
+        description: "Components to run: dmo, boe-archive, boe-latest (comma-separated) or 'all'"
+        required: false
+        default: 'all'
 
 permissions:
   contents: write   # needed so the workflow can push the updated file
@@ -44,7 +53,16 @@ jobs:
         run: pip install requests beautifulsoup4 openpyxl xlrd pandas
 
       - name: Run data fetch script
-        run: python fetch_gilt_data.py
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ARGS="--only ${{ github.event.inputs.only }}"
+          elif [ "${{ github.event.schedule }}" = "0 8 3 * *" ]; then
+            ARGS="--only all"
+          else
+            ARGS="--only boe-latest"
+          fi
+          echo "Running: python fetch_gilt_data.py $ARGS"
+          python fetch_gilt_data.py $ARGS
 
       - name: Commit and push if data changed
         run: |

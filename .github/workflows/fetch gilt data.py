@@ -35,10 +35,25 @@ free public sources:
         Tradeweb Insite (registration required, not scraped here).
      This part IS scraped automatically -- BoE's site doesn't block it.
 
+     NOTE: BoE's archive zips (glcnominalddata.zip / glcrealddata.zip)
+     are only refreshed on the 2nd working day of each month (confirmed
+     on the BoE page's own FAQ) -- on their own they always lag by
+     several weeks. This script also fetches BoE's separate "Latest
+     yield curve data" zip, which is updated daily, and overlays it on
+     top of the archive data to close that gap.
+
 Run:
 
     pip install requests beautifulsoup4 openpyxl xlrd pandas
-    python fetch_gilt_data.py
+    python fetch_gilt_data.py                    # full run, all sources
+    python fetch_gilt_data.py --only boe-latest   # fast daily refresh
+    python fetch_gilt_data.py --only dmo          # e.g. after adding new
+                                                   # dmo_raw/ files
+    python fetch_gilt_data.py --only dmo,boe-archive
+
+Skipped components reuse their data from the existing gilt_yields.json
+(if present) rather than being left empty, so a partial run never loses
+data a fuller run previously produced.
 
 Output: ./gilt_yields.json  (schema documented at the bottom of this
 file, and consumed by gilt-yield-explorer.html)
@@ -49,6 +64,7 @@ statements are left in deliberately so you can see where it breaks
 against the real file layouts and report back.
 """
 
+import argparse
 import io
 import json
 import os
@@ -67,6 +83,15 @@ except ImportError:
 HEADERS = {"User-Agent": "Mozilla/5.0 (gilt-yield-explorer data pipeline)"}
 
 BOE_CURVES_PAGE = "https://www.bankofengland.co.uk/statistics/yield-curves"
+
+# The archive zips (found via discover_boe_archive_zips) are only refreshed
+# on the 2nd working day of each month (confirmed on the BoE yield-curves
+# page's own FAQ) -- so on their own they always lag behind by several
+# weeks. This "latest" zip is updated daily and fills that gap; it bundles
+# several curve types together in one file, unlike the type-specific
+# archive zips, so its parser filters sheets by curve type too.
+BOE_LATEST_ZIP_URL = ("https://www.bankofengland.co.uk/-/media/boe/files/"
+                       "statistics/yield-curves/latest-yield-curve-data.zip")
 
 DMO_RAW_DIR = "./dmo_raw"  # put manually-downloaded DMO yearly files here
 
@@ -367,16 +392,156 @@ def build_boe_dataset():
     return curves
 
 
+def fetch_latest_boe_curves():
+    """Fetch BoE's 'Latest yield curve data' zip -- updated daily, unlike
+    the monthly-refreshed archive zips above. Bundles multiple curve types
+    (nominal, real, inflation, OIS, ...) together in one file, so sheets
+    are filtered on curve type AND 'spot' in the sheet name.
+    """
+    KEEP_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
+    result = {"nominal": [], "real": []}
+    try:
+        resp = requests.get(BOE_LATEST_ZIP_URL, headers=HEADERS, timeout=60)
+        resp.raise_for_status()
+    except Exception as e:
+        print(f"    could not fetch latest-yield-curve-data.zip: {e}")
+        return result
+
+    sheet_names_seen = []
+    with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
+        for name in zf.namelist():
+            if not name.lower().endswith((".xls", ".xlsx")):
+                continue
+            with zf.open(name) as f:
+                try:
+                    sheets = pd.read_excel(f, sheet_name=None, header=None)
+                except Exception as e:
+                    print(f"    could not parse {name} in latest zip: {e}")
+                    continue
+
+            for sheet_name, df in sheets.items():
+                sheet_names_seen.append(sheet_name)
+                sn = sheet_name.lower()
+                if "spot" not in sn:
+                    continue
+                if "nominal" in sn:
+                    curve_name = "nominal"
+                elif "real" in sn:
+                    curve_name = "real"
+                else:
+                    continue  # e.g. inflation/OIS sheets -- not tracked here
+
+                header = df.iloc[3]
+                maturities = pd.to_numeric(header[1:], errors="coerce")
+                col_for_target = {}
+                for col_idx, m in enumerate(maturities, start=1):
+                    if pd.isna(m):
+                        continue
+                    for target in KEEP_MATURITIES:
+                        if abs(m - target) <= 0.1:
+                            col_for_target.setdefault(target, col_idx)
+                data = df.iloc[4:]
+                for _, r in data.iterrows():
+                    date = pd.to_datetime(r[0], errors="coerce")
+                    if pd.isna(date):
+                        continue
+                    for target, col_idx in col_for_target.items():
+                        rate = pd.to_numeric(r[col_idx], errors="coerce")
+                        if pd.isna(rate):
+                            continue
+                        result[curve_name].append({
+                            "date": date.strftime("%Y-%m-%d"),
+                            "maturity_years": float(target),
+                            "rate_pct": float(rate),
+                        })
+
+    print(f"    parsed {len(result['nominal'])} nominal + {len(result['real'])} "
+          f"real rows from latest-yield-curve-data.zip")
+    if not result["nominal"] and not result["real"]:
+        print(f"    WARNING: 0 rows from the 'latest' zip. Sheet names found: "
+              f"{sheet_names_seen!r} -- if these don't look like "
+              f"nominal/real spot sheets, the filter above needs adjusting "
+              f"to match. Report this list back if so.")
+    return result
+
+
+def merge_curve_overlay(base, overlay):
+    """Combine two {'nominal':[...], 'real':[...]} curve dicts, with
+    `overlay` rows taking precedence over `base` rows on the same
+    (date, maturity) -- used to let the fresher 'latest' BoE data
+    supersede the monthly-archive data for whatever dates they share,
+    while keeping all the archive's older history.
+    """
+    result = {}
+    for curve_name in ("nominal", "real"):
+        by_key = {(r["date"], r["maturity_years"]): r
+                  for r in base.get(curve_name, [])}
+        for r in overlay.get(curve_name, []):
+            by_key[(r["date"], r["maturity_years"])] = r
+        result[curve_name] = sorted(by_key.values(),
+                                     key=lambda r: (r["date"], r["maturity_years"]))
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
 def main():
-    print("=== Building DMO per-security dataset (1996-2017) ===")
-    securities = build_dmo_dataset()
+    parser = argparse.ArgumentParser(
+        description="Build gilt_yields.json from DMO + BoE data sources.")
+    parser.add_argument(
+        "--only", default="all",
+        help=("Comma-separated components to run: dmo, boe-archive, "
+              "boe-latest, or 'all' (default). Skipped components reuse "
+              "their data from the existing gilt_yields.json if present. "
+              "E.g. --only boe-latest for a fast daily refresh; "
+              "--only dmo,boe-archive to skip the daily-only piece."))
+    args = parser.parse_args()
 
-    print("\n=== Building BoE curve dataset (2017-present) ===")
-    curves = build_boe_dataset()
+    valid = {"dmo", "boe-archive", "boe-latest"}
+    components = valid if args.only == "all" else set(args.only.split(","))
+    unknown = components - valid
+    if unknown:
+        raise SystemExit(f"Unknown --only component(s): {unknown}. "
+                          f"Valid: {sorted(valid)} or 'all'.")
+
+    previous = None
+    if os.path.exists("gilt_yields.json"):
+        try:
+            with open("gilt_yields.json") as f:
+                previous = json.load(f)
+        except Exception as e:
+            print(f"Could not read existing gilt_yields.json ({e}) -- "
+                  f"skipped components will start from empty instead.")
+
+    # --- securities (DMO) ---
+    if "dmo" in components:
+        print("=== Building DMO per-security dataset (1996-2017) ===")
+        securities = build_dmo_dataset()
+    else:
+        securities = (previous or {}).get("securities", [])
+        print(f"=== Skipping DMO (--only) -- reusing {len(securities)} "
+              f"securities from existing gilt_yields.json ===")
+
+    # --- curves (BoE archive, optionally overlaid with BoE latest) ---
+    if "boe-archive" in components:
+        print("\n=== Building BoE archive curve dataset ===")
+        curves = build_boe_dataset()
+    else:
+        curves = (previous or {}).get("curves", {"nominal": [], "real": []})
+        print(f"\n=== Skipping BoE archive (--only) -- reusing "
+              f"{len(curves.get('nominal', []))} nominal + "
+              f"{len(curves.get('real', []))} real curve points from "
+              f"existing gilt_yields.json ===")
+
+    if "boe-latest" in components:
+        print("\n=== Fetching BoE 'latest' curve data (fills the gap past "
+              "the monthly archive refresh) ===")
+        latest = fetch_latest_boe_curves()
+        curves = merge_curve_overlay(curves, latest)
+    else:
+        print("\n=== Skipping BoE latest (--only) ===")
 
     output = {
         "generated": datetime.utcnow().isoformat() + "Z",
@@ -387,8 +552,9 @@ def main():
             "DMO from 25 Nov 2002 (confirmed via dmo.gov.uk) up to "
             f"{CUTOVER_DATE}; earlier DMO files (1996-2001) contain "
             "prices only, no yield. curves.nominal / curves.real: "
-            "BoE Anderson-Sleath fitted spot curves by maturity, continuous "
-            "to present but NOT per-security."
+            "BoE Anderson-Sleath fitted spot curves by maturity -- the "
+            "monthly archive data overlaid with BoE's daily 'latest' "
+            "data, continuous to present but NOT per-security."
         ),
         "securities": securities,
         "curves": curves,

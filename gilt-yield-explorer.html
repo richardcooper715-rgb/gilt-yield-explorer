@@ -680,7 +680,11 @@ function renderCurveChange(){
     let parts2 = [];
     parts2.push(`<line class="gridline" x1="${M2.left}" x2="${W2-M2.right}" y1="${y2(0)}" y2="${y2(0)}"/>`);
     parts2.push(`<text class="axis" x="${M2.left-8}" y="${y2(0)+3}" text-anchor="end">0bp</text>`);
-    const barW = Math.max(4, plotW2/Math.max(diffs.length,1)*0.5);
+    const sortedX = diffs.map(d=>x2(d.maturity)).sort((a,b)=>a-b);
+    let minGap = Infinity;
+    for(let i=1;i<sortedX.length;i++) minGap = Math.min(minGap, sortedX[i]-sortedX[i-1]);
+    if(!isFinite(minGap)) minGap = plotW2;
+    const barW = Math.max(3, Math.min(24, minGap*0.55));
     diffs.forEach(d=>{
       const xx = x2(d.maturity);
       const yy0 = y2(0), yy1 = y2(d.bps);
