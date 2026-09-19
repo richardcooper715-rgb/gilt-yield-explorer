@@ -185,6 +185,18 @@
             <option value="dirty_price">Dirty price</option>
           </select>
         </label>
+        <label class="toggle">
+          Period:
+          <select id="periodSelect">
+            <option value="1">1 month</option>
+            <option value="3">3 months</option>
+            <option value="6">6 months</option>
+            <option value="12">12 months</option>
+            <option value="36">36 months</option>
+            <option value="60">60 months</option>
+            <option value="all" selected>Since inception</option>
+          </select>
+        </label>
         <label class="toggle"><input type="checkbox" id="showNominalCurve"> Overlay BoE nominal curve</label>
         <label class="toggle"><input type="checkbox" id="showRealCurve"> Overlay BoE real curve</label>
         <label class="toggle">
@@ -219,6 +231,9 @@
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="2,10" checked> 2s10s</label>
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,20" checked> 10s20s</label>
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,30" checked> 10s30s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,40"> 10s40s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="20,30"> 20s30s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="30,40"> 30s40s</label>
       </div>
 
       <div class="chart-wrap">
@@ -458,6 +473,7 @@ document.getElementById('search').addEventListener('input', (e)=>{
   });
 });
 document.getElementById('fieldSelect').addEventListener('change', e=>{ state.field = e.target.value; render(); });
+document.getElementById('periodSelect').addEventListener('change', render);
 document.getElementById('showNominalCurve').addEventListener('change', render);
 document.getElementById('showRealCurve').addEventListener('change', render);
 document.getElementById('snapshotDate').addEventListener('change', render);
@@ -480,6 +496,17 @@ function render(){
   else if(state.view==='steepness') renderSteepness();
 }
 
+function periodCutoffMonths(){
+  const val = document.getElementById('periodSelect').value;
+  return val==='all' ? null : parseInt(val,10);
+}
+
+function monthsAgo(dateMs, months){
+  const d = new Date(dateMs);
+  d.setMonth(d.getMonth()-months);
+  return +d;
+}
+
 function renderTimeSeries(){
   const svg = document.getElementById('chart');
   const legend = document.getElementById('legend');
@@ -490,20 +517,40 @@ function renderTimeSeries(){
   const selectedSecs = state.data.securities.filter(s=>state.selected.has(s.isin));
   const showNom = document.getElementById('showNominalCurve').checked;
   const showReal = document.getElementById('showRealCurve').checked;
+  const periodMonths = periodCutoffMonths();
+
+  // Anchor "trailing N months" to the most recent date across whatever
+  // could be plotted, so the window always reflects the latest data --
+  // not necessarily today's date.
+  let rawDates = [];
+  selectedSecs.forEach(s=> s.series.forEach(p=>{
+    if(p[field]!==undefined && p[field]!==null) rawDates.push(+new Date(p.date));
+  }));
+  if(field==='yield' && showNom) state.data.curves.nominal.forEach(r=>{
+    if(r.maturity_years===state.maturity) rawDates.push(+new Date(r.date));
+  });
+  if(field==='yield' && showReal) state.data.curves.real.forEach(r=>{
+    if(r.maturity_years===state.maturity) rawDates.push(+new Date(r.date));
+  });
+  let cutoff = -Infinity;
+  if(periodMonths!==null && rawDates.length){
+    cutoff = monthsAgo(Math.max(...rawDates), periodMonths);
+  }
 
   let allPoints = [];
   selectedSecs.forEach(s=> s.series.forEach(p=>{
     const v = p[field];
     if(v===undefined || v===null) return;
+    if(+new Date(p.date) < cutoff) return;
     allPoints.push({date:p.date, val:v});
   }));
   let curveNom=[], curveReal=[];
   if(field==='yield' && showNom){
-    curveNom = state.data.curves.nominal.filter(r=>r.maturity_years===state.maturity);
+    curveNom = state.data.curves.nominal.filter(r=>r.maturity_years===state.maturity && +new Date(r.date)>=cutoff);
     curveNom.forEach(p=>allPoints.push({date:p.date, val:p.rate_pct}));
   }
   if(field==='yield' && showReal){
-    curveReal = state.data.curves.real.filter(r=>r.maturity_years===state.maturity);
+    curveReal = state.data.curves.real.filter(r=>r.maturity_years===state.maturity && +new Date(r.date)>=cutoff);
     curveReal.forEach(p=>allPoints.push({date:p.date, val:p.rate_pct}));
   }
 
@@ -537,7 +584,7 @@ function renderTimeSeries(){
 
   selectedSecs.forEach(s=>{
     const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
-    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null)
+    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff)
       .map(p=>`${x(+new Date(p.date))},${y(p[field])}`).join(' ');
     if(pts) svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
   });
