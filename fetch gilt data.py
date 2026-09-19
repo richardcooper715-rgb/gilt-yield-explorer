@@ -408,10 +408,25 @@ def fetch_latest_boe_curves():
         return result
 
     sheet_names_seen = []
+    filenames_seen = []
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         for name in zf.namelist():
             if not name.lower().endswith((".xls", ".xlsx")):
                 continue
+            filenames_seen.append(name)
+
+            # The sheet names inside are generic ("spot curve" etc.) and
+            # identical across every workbook in this zip -- the curve
+            # type (nominal/real/inflation/OIS) is only distinguishable
+            # from the workbook's own filename.
+            fn = name.lower()
+            if "nominal" in fn:
+                curve_name = "nominal"
+            elif "real" in fn:
+                curve_name = "real"
+            else:
+                continue  # inflation / OIS / anything else -- not tracked here
+
             with zf.open(name) as f:
                 try:
                     sheets = pd.read_excel(f, sheet_name=None, header=None)
@@ -422,14 +437,8 @@ def fetch_latest_boe_curves():
             for sheet_name, df in sheets.items():
                 sheet_names_seen.append(sheet_name)
                 sn = sheet_name.lower()
-                if "spot" not in sn:
-                    continue
-                if "nominal" in sn:
-                    curve_name = "nominal"
-                elif "real" in sn:
-                    curve_name = "real"
-                else:
-                    continue  # e.g. inflation/OIS sheets -- not tracked here
+                if "spot" not in sn or "short" in sn:
+                    continue  # skip the short-end tab, keep the full spot curve
 
                 header = df.iloc[3]
                 maturities = pd.to_numeric(header[1:], errors="coerce")
@@ -458,10 +467,10 @@ def fetch_latest_boe_curves():
     print(f"    parsed {len(result['nominal'])} nominal + {len(result['real'])} "
           f"real rows from latest-yield-curve-data.zip")
     if not result["nominal"] and not result["real"]:
-        print(f"    WARNING: 0 rows from the 'latest' zip. Sheet names found: "
-              f"{sheet_names_seen!r} -- if these don't look like "
-              f"nominal/real spot sheets, the filter above needs adjusting "
-              f"to match. Report this list back if so.")
+        print(f"    WARNING: 0 rows from the 'latest' zip. Workbook filenames "
+              f"found: {filenames_seen!r}. Sheet names: {sheet_names_seen!r} -- "
+              f"if none of the filenames contain 'nominal'/'real', report this "
+              f"list back so the filter can be adjusted.")
     return result
 
 
