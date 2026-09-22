@@ -29,18 +29,31 @@ free public sources:
   2. Bank of England Anderson-Sleath fitted yield curves (continuous,
      1979/1985 - present)
      https://www.bankofengland.co.uk/statistics/yield-curves
-     -> curve-level (not per-security) nominal and real spot yields,
-        used here to extend coverage past 21 Jul 2017, when DMO
+     -> curve-level (not per-security) nominal, real, and implied-
+        inflation (BEI) curves, in both spot (zero coupon) and forward
+        form, used here to extend coverage past 21 Jul 2017, when DMO
         stopped publishing and per-security prices moved behind
         Tradeweb Insite (registration required, not scraped here).
      This part IS scraped automatically -- BoE's site doesn't block it.
 
-     NOTE: BoE's archive zips (glcnominalddata.zip / glcrealddata.zip)
-     are only refreshed on the 2nd working day of each month (confirmed
-     on the BoE page's own FAQ) -- on their own they always lag by
-     several weeks. This script also fetches BoE's separate "Latest
-     yield curve data" zip, which is updated daily, and overlays it on
-     top of the archive data to close that gap.
+     NOTE on par vs zero coupon: BoE does NOT publish a par-yield curve
+     at all -- confirmed on their FAQ, which documents only "spot" and
+     "forward" as the two measures they produce. What this script pulls
+     from the "spot curve" sheet IS the zero-coupon curve already. Par
+     yields, if wanted, are bootstrapped from the spot curve client-side
+     in the app (see gilt-yield-explorer.html), not fetched from BoE.
+
+     NOTE on BEI: BoE publishes the implied inflation curve directly
+     (glcinflationddata.zip), which is a better BEI series than a naive
+     nominal-minus-real spread, so this script fetches it as its own
+     curve type rather than deriving it.
+
+     NOTE on refresh cadence: BoE's archive zips are only refreshed on
+     the 2nd working day of each month (confirmed on the BoE page's own
+     FAQ) -- on their own they always lag by several weeks. This script
+     also fetches BoE's separate "Latest yield curve data" zip, which is
+     updated daily, and overlays it on top of the archive data to close
+     that gap.
 
 Run:
 
@@ -96,6 +109,13 @@ BOE_LATEST_ZIP_URL = ("https://www.bankofengland.co.uk/-/media/boe/files/"
 DMO_RAW_DIR = "./dmo_raw"  # put manually-downloaded DMO yearly files here
 
 CUTOVER_DATE = "2017-07-21"  # last DMO reference price date
+
+# BoE publishes gilt-based nominal, real, and implied-inflation (BEI) curves.
+# There is no "par yield" curve published anywhere -- confirmed via BoE's own
+# FAQ, which only documents spot and forward measures. Par yields, if wanted,
+# have to be bootstrapped from the spot curve (done client-side in the app).
+BOE_CURVE_TYPES = ("nominal", "real", "inflation")
+KEEP_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
 
 
 # ---------------------------------------------------------------------------
@@ -288,51 +308,96 @@ def build_dmo_dataset():
 # ---------------------------------------------------------------------------
 
 def discover_boe_archive_zips():
-    """Find the nominal and real spot-curve archive zip links on the
-    BoE yield curves page."""
+    """Find the nominal, real, and inflation daily archive zip links on
+    the BoE yield curves page."""
     resp = requests.get(BOE_CURVES_PAGE, headers=HEADERS, timeout=30)
     resp.raise_for_status()
     soup = BeautifulSoup(resp.text, "html.parser")
 
-    # Only want the DAILY gilt-based spot curves: glcnominalddata.zip and
-    # glcrealddata.zip. Explicitly exclude "month" (monthly duplicates) and
-    # "blc" (LIBOR-based commercial liability curves -- not gilt-based).
-    daily_gilt_re = re.compile(r"glc(nominal|real)ddata\.zip$", re.IGNORECASE)
+    # Only want the DAILY gilt-based curves: glcnominalddata.zip,
+    # glcrealddata.zip, glcinflationddata.zip. Explicitly exclude "month"
+    # (monthly duplicates) and "blc"/"ois" (not gilt-based).
+    daily_gilt_re = re.compile(r"glc(nominal|real|inflation)ddata\.zip$",
+                                re.IGNORECASE)
 
-    zips = {"nominal": [], "real": []}
+    zips = {c: [] for c in BOE_CURVE_TYPES}
     for a in soup.find_all("a", href=True):
         href = a["href"]
         if not href.lower().endswith(".zip"):
             continue
         m = daily_gilt_re.search(href)
         if not m:
-            continue  # skip monthly, blc, and anything else
+            continue  # skip monthly, blc, ois, and anything else
         url = href if href.startswith("http") else f"https://www.bankofengland.co.uk{href}"
         curve = m.group(1).lower()
         zips[curve].append(url)
 
-    print(f"Discovered BoE archives: "
-          f"{len(zips['nominal'])} nominal, {len(zips['real'])} real")
+    print("Discovered BoE archives: " +
+          ", ".join(f"{len(zips[c])} {c}" for c in BOE_CURVE_TYPES))
     return zips
 
 
-def parse_boe_zip(url, curve_name):
-    """Each BoE archive zip contains per-period Excel workbooks with a
-    spot-curve sheet: date rows x maturity-year columns, rate in %.
+def extract_curve_measures(sheets):
+    """Given {sheet_name: DataFrame} for one workbook, pull out the spot
+    and forward curve tabs (skipping the separately-fitted "short end"
+    tabs, which use a different maturity grid and would double-count
+    points already in the full curve -- see BoE's own FAQ on this).
+    Returns {"spot": [rows], "forward": [rows]}.
+    """
+    out = {"spot": [], "forward": []}
+    for sheet_name, df in sheets.items():
+        sn = sheet_name.lower()
+        if "short" in sn:
+            continue
+        if "spot" in sn:
+            measure = "spot"
+        elif "fwd" in sn or "forward" in sn:
+            measure = "forward"
+        else:
+            continue
+
+        header = df.iloc[3]  # guess: header row after title rows
+        maturities = pd.to_numeric(header[1:], errors="coerce")
+        col_for_target = {}
+        for col_idx, m in enumerate(maturities, start=1):
+            if pd.isna(m):
+                continue
+            for target in KEEP_MATURITIES:
+                if abs(m - target) <= 0.1:
+                    col_for_target.setdefault(target, col_idx)
+        data = df.iloc[4:]
+        for _, r in data.iterrows():
+            date = pd.to_datetime(r[0], errors="coerce")
+            if pd.isna(date):
+                continue
+            for target, col_idx in col_for_target.items():
+                rate = pd.to_numeric(r[col_idx], errors="coerce")
+                if pd.isna(rate):
+                    continue
+                out[measure].append({
+                    "date": date.strftime("%Y-%m-%d"),
+                    "maturity_years": float(target),
+                    "rate_pct": float(rate),
+                })
+    return out
+
+
+def parse_boe_zip(url):
+    """Each BoE archive zip contains per-period Excel workbooks with
+    spot and forward curve sheets: date rows x maturity-year columns,
+    rate in %. Returns {"spot": [rows], "forward": [rows]}.
 
     BoE publishes these on a very fine maturity grid (roughly monthly
     steps across the full curve), which is far more resolution than a
     maturity-selector dropdown needs and makes the JSON output huge
     (multi-hundred-MB, unusable on mobile). We keep only a curated set
-    of "round number" maturities -- enough to be useful for an overlay
-    selector, without carrying ~40x more data than needed.
+    of "round number" maturities (KEEP_MATURITIES) -- enough to be
+    useful for a selector, without carrying ~40x more data than needed.
     """
-    KEEP_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
-
     resp = requests.get(url, headers=HEADERS, timeout=60)
     resp.raise_for_status()
 
-    rows = []
+    result = {"spot": [], "forward": []}
     with zipfile.ZipFile(io.BytesIO(resp.content)) as zf:
         for name in zf.namelist():
             if not name.lower().endswith((".xls", ".xlsx")):
@@ -343,63 +408,41 @@ def parse_boe_zip(url, curve_name):
                 except Exception as e:
                     print(f"    could not parse {name}: {e}")
                     continue
+            measures = extract_curve_measures(sheets)
+            result["spot"].extend(measures["spot"])
+            result["forward"].extend(measures["forward"])
 
-            for sheet_name, df in sheets.items():
-                if "spot" not in sheet_name.lower():
-                    continue
-                # Expect: first column = date, header row = maturities in years.
-                # Layout varies -- inspect the real workbook and adjust.
-                header = df.iloc[3]  # guess: header row after title rows
-                maturities = pd.to_numeric(header[1:], errors="coerce")
-                # Map each curated maturity to the nearest actual column,
-                # so we don't need the source grid to land on exact integers.
-                col_for_target = {}
-                for col_idx, m in enumerate(maturities, start=1):
-                    if pd.isna(m):
-                        continue
-                    for target in KEEP_MATURITIES:
-                        if abs(m - target) <= 0.1:
-                            col_for_target.setdefault(target, col_idx)
-                data = df.iloc[4:]
-                for _, r in data.iterrows():
-                    date = pd.to_datetime(r[0], errors="coerce")
-                    if pd.isna(date):
-                        continue
-                    for target, col_idx in col_for_target.items():
-                        rate = pd.to_numeric(r[col_idx], errors="coerce")
-                        if pd.isna(rate):
-                            continue
-                        rows.append({
-                            "date": date.strftime("%Y-%m-%d"),
-                            "maturity_years": float(target),
-                            "rate_pct": float(rate),
-                        })
-    print(f"    parsed {len(rows)} rows from {url} "
-          f"(curated to {len(KEEP_MATURITIES)} maturities: {KEEP_MATURITIES})")
-    return rows
+    print(f"    parsed {len(result['spot'])} spot + {len(result['forward'])} "
+          f"forward rows from {url} (curated to {len(KEEP_MATURITIES)} "
+          f"maturities: {KEEP_MATURITIES})")
+    return result
 
 
 def build_boe_dataset():
     zips = discover_boe_archive_zips()
-    curves = {"nominal": [], "real": []}
-    for curve_name in ("nominal", "real"):
+    curves = {c: {"spot": [], "forward": []} for c in BOE_CURVE_TYPES}
+    for curve_name in BOE_CURVE_TYPES:
         for url in zips[curve_name]:
             try:
-                curves[curve_name].extend(parse_boe_zip(url, curve_name))
+                parsed = parse_boe_zip(url)
+                curves[curve_name]["spot"].extend(parsed["spot"])
+                curves[curve_name]["forward"].extend(parsed["forward"])
             except Exception as e:
                 print(f"  FAILED {url}: {e}")
-        curves[curve_name].sort(key=lambda r: (r["date"], r["maturity_years"]))
+        for measure in ("spot", "forward"):
+            curves[curve_name][measure].sort(
+                key=lambda r: (r["date"], r["maturity_years"]))
     return curves
 
 
 def fetch_latest_boe_curves():
     """Fetch BoE's 'Latest yield curve data' zip -- updated daily, unlike
     the monthly-refreshed archive zips above. Bundles multiple curve types
-    (nominal, real, inflation, OIS, ...) together in one file, so sheets
-    are filtered on curve type AND 'spot' in the sheet name.
+    (nominal, real, inflation, OIS, ...) together in one file, so the
+    curve type is read from the workbook's filename (sheet names are
+    generic and identical across every workbook in this zip).
     """
-    KEEP_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
-    result = {"nominal": [], "real": []}
+    result = {c: {"spot": [], "forward": []} for c in BOE_CURVE_TYPES}
     try:
         resp = requests.get(BOE_LATEST_ZIP_URL, headers=HEADERS, timeout=60)
         resp.raise_for_status()
@@ -415,17 +458,14 @@ def fetch_latest_boe_curves():
                 continue
             filenames_seen.append(name)
 
-            # The sheet names inside are generic ("spot curve" etc.) and
-            # identical across every workbook in this zip -- the curve
-            # type (nominal/real/inflation/OIS) is only distinguishable
-            # from the workbook's own filename.
             fn = name.lower()
-            if "nominal" in fn:
-                curve_name = "nominal"
-            elif "real" in fn:
-                curve_name = "real"
-            else:
-                continue  # inflation / OIS / anything else -- not tracked here
+            curve_name = None
+            for c in BOE_CURVE_TYPES:
+                if c in fn:
+                    curve_name = c
+                    break
+            if curve_name is None:
+                continue  # OIS / BLC / anything else -- not tracked here
 
             with zf.open(name) as f:
                 try:
@@ -433,62 +473,41 @@ def fetch_latest_boe_curves():
                 except Exception as e:
                     print(f"    could not parse {name} in latest zip: {e}")
                     continue
+            sheet_names_seen.extend(sheets.keys())
+            measures = extract_curve_measures(sheets)
+            result[curve_name]["spot"].extend(measures["spot"])
+            result[curve_name]["forward"].extend(measures["forward"])
 
-            for sheet_name, df in sheets.items():
-                sheet_names_seen.append(sheet_name)
-                sn = sheet_name.lower()
-                if "spot" not in sn or "short" in sn:
-                    continue  # skip the short-end tab, keep the full spot curve
-
-                header = df.iloc[3]
-                maturities = pd.to_numeric(header[1:], errors="coerce")
-                col_for_target = {}
-                for col_idx, m in enumerate(maturities, start=1):
-                    if pd.isna(m):
-                        continue
-                    for target in KEEP_MATURITIES:
-                        if abs(m - target) <= 0.1:
-                            col_for_target.setdefault(target, col_idx)
-                data = df.iloc[4:]
-                for _, r in data.iterrows():
-                    date = pd.to_datetime(r[0], errors="coerce")
-                    if pd.isna(date):
-                        continue
-                    for target, col_idx in col_for_target.items():
-                        rate = pd.to_numeric(r[col_idx], errors="coerce")
-                        if pd.isna(rate):
-                            continue
-                        result[curve_name].append({
-                            "date": date.strftime("%Y-%m-%d"),
-                            "maturity_years": float(target),
-                            "rate_pct": float(rate),
-                        })
-
-    print(f"    parsed {len(result['nominal'])} nominal + {len(result['real'])} "
-          f"real rows from latest-yield-curve-data.zip")
-    if not result["nominal"] and not result["real"]:
+    totals = {c: len(result[c]["spot"]) + len(result[c]["forward"])
+              for c in BOE_CURVE_TYPES}
+    print(f"    parsed from latest-yield-curve-data.zip: " +
+          ", ".join(f"{c}={totals[c]}" for c in BOE_CURVE_TYPES) +
+          " (spot+forward rows combined)")
+    if sum(totals.values()) == 0:
         print(f"    WARNING: 0 rows from the 'latest' zip. Workbook filenames "
               f"found: {filenames_seen!r}. Sheet names: {sheet_names_seen!r} -- "
-              f"if none of the filenames contain 'nominal'/'real', report this "
-              f"list back so the filter can be adjusted.")
+              f"if none of the filenames contain 'nominal'/'real'/'inflation', "
+              f"report this list back so the filter can be adjusted.")
     return result
 
 
 def merge_curve_overlay(base, overlay):
-    """Combine two {'nominal':[...], 'real':[...]} curve dicts, with
+    """Combine two {curve_type: {measure: [...]}} curve dicts, with
     `overlay` rows taking precedence over `base` rows on the same
     (date, maturity) -- used to let the fresher 'latest' BoE data
     supersede the monthly-archive data for whatever dates they share,
     while keeping all the archive's older history.
     """
     result = {}
-    for curve_name in ("nominal", "real"):
-        by_key = {(r["date"], r["maturity_years"]): r
-                  for r in base.get(curve_name, [])}
-        for r in overlay.get(curve_name, []):
-            by_key[(r["date"], r["maturity_years"])] = r
-        result[curve_name] = sorted(by_key.values(),
-                                     key=lambda r: (r["date"], r["maturity_years"]))
+    for curve_name in BOE_CURVE_TYPES:
+        result[curve_name] = {}
+        for measure in ("spot", "forward"):
+            by_key = {(r["date"], r["maturity_years"]): r
+                      for r in base.get(curve_name, {}).get(measure, [])}
+            for r in overlay.get(curve_name, {}).get(measure, []):
+                by_key[(r["date"], r["maturity_years"])] = r
+            result[curve_name][measure] = sorted(
+                by_key.values(), key=lambda r: (r["date"], r["maturity_years"]))
     return result
 
 
@@ -534,15 +553,19 @@ def main():
               f"securities from existing gilt_yields.json ===")
 
     # --- curves (BoE archive, optionally overlaid with BoE latest) ---
+    empty_curves = {c: {"spot": [], "forward": []} for c in BOE_CURVE_TYPES}
     if "boe-archive" in components:
-        print("\n=== Building BoE archive curve dataset ===")
+        print("\n=== Building BoE archive curve dataset "
+              "(nominal, real, inflation -- spot + forward) ===")
         curves = build_boe_dataset()
     else:
-        curves = (previous or {}).get("curves", {"nominal": [], "real": []})
-        print(f"\n=== Skipping BoE archive (--only) -- reusing "
-              f"{len(curves.get('nominal', []))} nominal + "
-              f"{len(curves.get('real', []))} real curve points from "
-              f"existing gilt_yields.json ===")
+        curves = (previous or {}).get("curves", empty_curves)
+        counts = ", ".join(
+            f"{c}={len(curves.get(c, {}).get('spot', []))}sp+"
+            f"{len(curves.get(c, {}).get('forward', []))}fwd"
+            for c in BOE_CURVE_TYPES)
+        print(f"\n=== Skipping BoE archive (--only) -- reusing {counts} "
+              f"curve points from existing gilt_yields.json ===")
 
     if "boe-latest" in components:
         print("\n=== Fetching BoE 'latest' curve data (fills the gap past "
@@ -556,14 +579,21 @@ def main():
         "generated": datetime.utcnow().isoformat() + "Z",
         "cutover_date": CUTOVER_DATE,
         "notes": (
-            "securities[]: per-ISIN daily yields, DMO reference prices. "
-            "Gross redemption yields were only calculated/published by "
-            "DMO from 25 Nov 2002 (confirmed via dmo.gov.uk) up to "
-            f"{CUTOVER_DATE}; earlier DMO files (1996-2001) contain "
-            "prices only, no yield. curves.nominal / curves.real: "
-            "BoE Anderson-Sleath fitted spot curves by maturity -- the "
-            "monthly archive data overlaid with BoE's daily 'latest' "
-            "data, continuous to present but NOT per-security."
+            "securities[]: per-ISIN daily yields + dirty prices, DMO "
+            "reference prices. Gross redemption yields were only "
+            "calculated/published by DMO from 25 Nov 2002 (confirmed via "
+            f"dmo.gov.uk) up to {CUTOVER_DATE}; earlier DMO files "
+            "(1996-2001) contain prices only, no yield. "
+            "curves.{nominal,real,inflation}.{spot,forward}: BoE "
+            "Anderson-Sleath fitted curves by maturity (continuously "
+            "compounded, per BoE's own FAQ) -- monthly archive data "
+            "overlaid with BoE's daily 'latest' data. 'spot' = zero "
+            "coupon yields; 'forward' = instantaneous forward rates; "
+            "'inflation' = implied breakeven inflation (BEI), published "
+            "directly by BoE rather than derived as nominal-minus-real. "
+            "There is no published par-yield curve -- BoE's FAQ confirms "
+            "only spot and forward are produced; par yields are "
+            "bootstrapped from the spot curve client-side in the app."
         ),
         "securities": securities,
         "curves": curves,
@@ -572,9 +602,12 @@ def main():
     with open("gilt_yields.json", "w") as f:
         json.dump(output, f, separators=(",", ":"))
 
+    curve_summary = ", ".join(
+        f"{c}={len(curves.get(c, {}).get('spot', []))}sp+"
+        f"{len(curves.get(c, {}).get('forward', []))}fwd"
+        for c in BOE_CURVE_TYPES)
     print(f"\nWrote gilt_yields.json: {len(securities)} securities, "
-          f"{len(curves['nominal'])} nominal curve points, "
-          f"{len(curves['real'])} real curve points.")
+          f"curves: {curve_summary}.")
 
 
 if __name__ == "__main__":
@@ -596,7 +629,11 @@ if __name__ == "__main__":
 #     }, ...
 #   ],
 #   "curves": {
-#     "nominal": [{"date": "2017-07-24", "maturity_years": 10.0, "rate_pct": 1.23}, ...],
-#     "real":    [{"date": "2017-07-24", "maturity_years": 10.0, "rate_pct": -1.75}, ...]
+#     "nominal":   {"spot": [{"date":"2017-07-24","maturity_years":10.0,"rate_pct":1.23}, ...],
+#                   "forward": [...same shape...]},
+#     "real":      {"spot": [...], "forward": [...]},
+#     "inflation": {"spot": [...], "forward": [...]}   # implied BEI, published directly by BoE
 #   }
+#   # No "par" key -- BoE doesn't publish par yields; the app derives them
+#   # client-side from curves.<type>.spot via a standard bootstrap.
 # }
