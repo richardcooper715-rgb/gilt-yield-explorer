@@ -115,7 +115,30 @@ CUTOVER_DATE = "2017-07-21"  # last DMO reference price date
 # FAQ, which only documents spot and forward measures. Par yields, if wanted,
 # have to be bootstrapped from the spot curve (done client-side in the app).
 BOE_CURVE_TYPES = ("nominal", "real", "inflation")
-KEEP_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
+
+# AXIS_MATURITIES: the original curated "round number" set -- kept purely
+# as a reference for what the app uses as fixed axis tick labels and the
+# Time Series maturity-overlay dropdown (see gilt-yield-explorer.html's
+# own AXIS_MATURITIES constant, which must match this one).
+AXIS_MATURITIES = [1, 2, 3, 4, 5, 7, 10, 15, 20, 25, 30, 40]
+
+# KEEP_MATURITIES: every integer year 1-40. Used for the actual fetched
+# curve data. This used to match AXIS_MATURITIES exactly (12 points), but
+# was widened so the forward curve (and now spot/par too, for free) is
+# sampled at every year rather than only at the round-number points --
+# the app still labels its axes only at AXIS_MATURITIES, this just gives
+# it more real data to draw a smoother/more accurate line through.
+KEEP_MATURITIES = list(range(1, 41))
+
+# BoE's daily archive goes back decades, so keeping all 40 maturities for
+# every single day since inception made gilt_yields.json too big to push
+# to GitHub (126MB, over GitHub's 100MB single-file push limit). This
+# trims maturity resolution for older dates, where the extra detail
+# matters less, while keeping full year-by-year granularity for the
+# recent period this app is mostly used to analyse:
+#   - before GRANULARITY_CUTOVER_DATE: only AXIS_MATURITIES (12 points/day)
+#   - from GRANULARITY_CUTOVER_DATE:   all of KEEP_MATURITIES (40 points/day)
+GRANULARITY_CUTOVER_DATE = "2016-01-01"
 
 
 # ---------------------------------------------------------------------------
@@ -343,6 +366,11 @@ def extract_curve_measures(sheets):
     tabs, which use a different maturity grid and would double-count
     points already in the full curve -- see BoE's own FAQ on this).
     Returns {"spot": [rows], "forward": [rows]}.
+
+    Maturity resolution depends on date -- see GRANULARITY_CUTOVER_DATE
+    above: coarse (AXIS_MATURITIES) before it, full (KEEP_MATURITIES)
+    from it onward. This keeps file size manageable while giving the
+    recent period (what this app is mostly used to analyse) full detail.
     """
     out = {"spot": [], "forward": []}
     for sheet_name, df in sheets.items():
@@ -358,24 +386,34 @@ def extract_curve_measures(sheets):
 
         header = df.iloc[3]  # guess: header row after title rows
         maturities = pd.to_numeric(header[1:], errors="coerce")
-        col_for_target = {}
+        # Map both the full and coarse target sets to actual columns once
+        # per sheet -- which one applies is decided per-row, by date.
+        col_for_target_full = {}
         for col_idx, m in enumerate(maturities, start=1):
             if pd.isna(m):
                 continue
             for target in KEEP_MATURITIES:
                 if abs(m - target) <= 0.1:
-                    col_for_target.setdefault(target, col_idx)
+                    col_for_target_full.setdefault(target, col_idx)
+        col_for_target_coarse = {t: col_for_target_full[t]
+                                  for t in AXIS_MATURITIES
+                                  if t in col_for_target_full}
+
         data = df.iloc[4:]
         for _, r in data.iterrows():
             date = pd.to_datetime(r[0], errors="coerce")
             if pd.isna(date):
                 continue
+            date_str = date.strftime("%Y-%m-%d")
+            col_for_target = (col_for_target_full
+                               if date_str >= GRANULARITY_CUTOVER_DATE
+                               else col_for_target_coarse)
             for target, col_idx in col_for_target.items():
                 rate = pd.to_numeric(r[col_idx], errors="coerce")
                 if pd.isna(rate):
                     continue
                 out[measure].append({
-                    "date": date.strftime("%Y-%m-%d"),
+                    "date": date_str,
                     "maturity_years": float(target),
                     "rate_pct": float(rate),
                 })
@@ -593,7 +631,12 @@ def main():
             "directly by BoE rather than derived as nominal-minus-real. "
             "There is no published par-yield curve -- BoE's FAQ confirms "
             "only spot and forward are produced; par yields are "
-            "bootstrapped from the spot curve client-side in the app."
+            "bootstrapped from the spot curve client-side in the app. "
+            f"Maturity resolution is date-dependent (kept file size "
+            f"under GitHub's 100MB push limit): only "
+            f"{AXIS_MATURITIES} years before {GRANULARITY_CUTOVER_DATE}, "
+            f"all of {KEEP_MATURITIES[0]}-{KEEP_MATURITIES[-1]} (every "
+            f"year) from {GRANULARITY_CUTOVER_DATE} onward."
         ),
         "securities": securities,
         "curves": curves,
@@ -636,4 +679,7 @@ if __name__ == "__main__":
 #   }
 #   # No "par" key -- BoE doesn't publish par yields; the app derives them
 #   # client-side from curves.<type>.spot via a standard bootstrap.
+#   # Maturity coverage is date-dependent: only AXIS_MATURITIES (12
+#   # points) before GRANULARITY_CUTOVER_DATE, all of KEEP_MATURITIES
+#   # (every year 1-40) from that date onward -- see the constants above.
 # }

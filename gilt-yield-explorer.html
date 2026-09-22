@@ -277,6 +277,13 @@
 <script>
 const COLORS = ["#2A5C8A","#A8763E","#5B7B4C","#7A4E8C","#B04A3C","#3E8B8B","#8C6E4E","#556B8C"];
 
+// Fixed "round number" maturities used for axis tick labels and the Time
+// Series overlay dropdown -- must match AXIS_MATURITIES in fetch_gilt_data.py.
+// The underlying curve data itself now carries every year 1-40 (for a
+// smoother/more accurate forward curve in particular), but we deliberately
+// don't clutter the axis or the dropdown with all 40 of those points.
+const AXIS_MATURITIES = [1,2,3,4,5,7,10,15,20,25,30,40];
+
 // Small embedded sample so this artifact renders something useful even
 // without gilt_yields.json present. Replace by running fetch_gilt_data.py
 // and serving the resulting file alongside this HTML.
@@ -395,7 +402,8 @@ function buildSecurityList(){
 
 function buildMaturityOptions(){
   const sel = document.getElementById('maturitySelect');
-  const mats = [...new Set(state.data.curves.nominal.spot.map(r=>r.maturity_years))].sort((a,b)=>a-b);
+  const available = new Set(state.data.curves.nominal.spot.map(r=>r.maturity_years));
+  const mats = AXIS_MATURITIES.filter(m=>available.has(m));
   sel.innerHTML = mats.map(m=>`<option value="${m}">${m}y</option>`).join('');
   sel.value = mats.includes(10) ? 10 : mats[0];
   state.maturity = +sel.value;
@@ -873,7 +881,7 @@ function renderCurveSnapshot(){
 
   let svgParts = [];
   drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(2)+'%');
-  drawXAxisMaturity(svgParts, M, H, plotH, x, maturities);
+  drawXAxisMaturity(svgParts, M, H, plotH, x, AXIS_MATURITIES.filter(m=>m>=xMin && m<=xMax));
 
   const color = curveTypeColor(curveType);
   const linePts = pts.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
@@ -935,7 +943,8 @@ function renderCurveChange(){
 
   let svgParts = [];
   drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(2)+'%');
-  drawXAxisMaturity(svgParts, M, H, plotH, x, allMaturities);
+  const axisMaturities = AXIS_MATURITIES.filter(m=>m>=xMin && m<=xMax);
+  drawXAxisMaturity(svgParts, M, H, plotH, x, axisMaturities);
 
   const colorA = COLORS[0], colorB = COLORS[4];
   const lineA = ptsA.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
@@ -944,8 +953,13 @@ function renderCurveChange(){
   svgParts.push(`<polyline class="series-line" points="${lineB}" stroke="${colorB}"/>`);
   ptsA.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorA}"/>`));
   ptsB.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorB}"/>`));
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
 
   svg.innerHTML = svgParts.join('');
+  attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, [
+    {label:`${dateA}`, color:colorA, points: ptsA.map(p=>({x:p.maturity_years, val:p.rate_pct}))},
+    {label:`${dateB}`, color:colorB, points: ptsB.map(p=>({x:p.maturity_years, val:p.rate_pct}))}
+  ], v=>v.toFixed(3)+'%');
 
   let legendHtml = `<span class="legend-item"><span class="legend-swatch" style="background:${colorA}"></span>${curveTypeLabel(curveType)} (${measure}) — ${dateA}</span>`+
     `<span class="legend-item"><span class="legend-swatch" style="background:${colorB}"></span>${curveTypeLabel(curveType)} (${measure}) — ${dateB}</span>`;
@@ -954,7 +968,7 @@ function renderCurveChange(){
     chart2.style.display='block';
     const mapA = Object.fromEntries(ptsA.map(p=>[p.maturity_years,p.rate_pct]));
     const mapB = Object.fromEntries(ptsB.map(p=>[p.maturity_years,p.rate_pct]));
-    const diffs = allMaturities
+    const diffs = axisMaturities
       .filter(m=>mapA[m]!==undefined && mapB[m]!==undefined)
       .map(m=>({maturity:m, bps:(mapB[m]-mapA[m])*100}));
 
@@ -1041,13 +1055,17 @@ function renderSteepness(){
     svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}" stroke-width="1.4"/>`);
   }
 
+  let tooltipSeries = [];
   series.forEach((s,i)=>{
     const color = COLORS[i%COLORS.length];
     const pts = s.pts.map(p=>`${x(+new Date(p.date))},${y(p.bps)}`).join(' ');
     svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
+    tooltipSeries.push({label:s.label, color, points: s.pts.map(p=>({t:+new Date(p.date), val:p.bps}))});
   });
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
 
   svg.innerHTML = svgParts.join('');
+  attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, tooltipSeries, v=>v.toFixed(1)+'bp');
   legend.innerHTML = series.map((s,i)=>{
     const color = COLORS[i%COLORS.length];
     return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.label} (${curveType}, ${measure})</span>`;
