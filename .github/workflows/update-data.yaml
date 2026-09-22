@@ -2,12 +2,17 @@
 # (GitHub Actions only looks for workflow files in that exact folder).
 #
 # What it does:
-#   - Runs every day at 07:00 UTC with `--only boe-latest`, a fast fetch
-#     of just BoE's daily-updated "latest yield curve data" file -- this
-#     is the only piece that actually changes day to day.
-#   - Runs once a month (3rd, 08:00 UTC) with `--only all`, which also
-#     re-fetches DMO + the BoE monthly archive zips -- this catches any
-#     data revisions BoE makes and keeps everything in sync.
+#   - Runs every day at 13:00 UTC (2pm UK time while BST is in effect;
+#     1pm once clocks go back to GMT in late October -- GitHub Actions
+#     cron has no timezone/DST awareness, so this drifts by an hour
+#     twice a year unless you adjust it) with `--only boe-latest`, a
+#     fast fetch of just BoE's daily-updated "latest yield curve data"
+#     file. Set for 2pm rather than earlier because BoE aim to publish
+#     by noon UK time but don't always land right at noon.
+#   - Runs once a month (3rd, 14:00 UTC, same reasoning) with `--only
+#     all`, which also re-fetches DMO + the BoE monthly archive zips --
+#     this catches any data revisions BoE makes and keeps everything in
+#     sync.
 #   - Can also be triggered manually from the Actions tab any time, with
 #     an optional "only" input if you want to run just one piece
 #     (e.g. "dmo" after adding new dmo_raw/ files, or "boe-archive").
@@ -25,8 +30,8 @@ name: Update gilt yield data
 
 on:
   schedule:
-    - cron: '0 7 * * *'     # every day at 07:00 UTC -- fast, latest BoE data only
-    - cron: '0 8 3 * *'     # 3rd of each month -- full run (archive refresh + revisions)
+    - cron: '0 13 * * *'    # every day at 13:00 UTC (2pm BST / 1pm GMT) -- fast, latest BoE data only
+    - cron: '0 14 3 * *'    # 3rd of each month, 14:00 UTC -- full run (archive refresh + revisions)
   workflow_dispatch:
     inputs:
       only:
@@ -42,10 +47,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: '3.12'
 
@@ -56,7 +61,7 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ARGS="--only ${{ github.event.inputs.only }}"
-          elif [ "${{ github.event.schedule }}" = "0 8 3 * *" ]; then
+          elif [ "${{ github.event.schedule }}" = "0 14 3 * *" ]; then
             ARGS="--only all"
           else
             ARGS="--only boe-latest"
