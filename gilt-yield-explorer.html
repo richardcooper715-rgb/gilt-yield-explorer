@@ -618,8 +618,24 @@ function drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, periodMonths){
   }
 }
 
-function attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFmt){
+function showTooltipAt(clientX, clientY, html){
   const tooltip = document.getElementById('tooltip');
+  tooltip.innerHTML = html;
+  // Keep the box on-screen near the left/right viewport edges: default
+  // centers on the cursor, but flips to hang off whichever side has room.
+  let tx = '-50%';
+  if(clientX < 110) tx = '0%';
+  else if(clientX > window.innerWidth - 150) tx = '-100%';
+  tooltip.style.transform = `translate(${tx}, -120%)`;
+  tooltip.style.left = (clientX + window.scrollX) + 'px';
+  tooltip.style.top = (clientY + window.scrollY) + 'px';
+  tooltip.style.opacity = 1;
+}
+function hideTooltip(){
+  document.getElementById('tooltip').style.opacity = 0;
+}
+
+function attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFmt){
   const hit = svg.querySelector('#hoverHit');
   if(!hit || !series.length) return;
 
@@ -636,7 +652,7 @@ function attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFm
     const vb = svg.viewBox.baseVal;
     const scaleX = vb.width / rect.width;
     const mouseX = (evt.clientX - rect.left) * scaleX;
-    if(mouseX < M.left || mouseX > M.left+plotW){ tooltip.style.opacity=0; return; }
+    if(mouseX < M.left || mouseX > M.left+plotW){ hideTooltip(); return; }
     const t0 = xMin + (mouseX-M.left)/plotW*(xMax-xMin);
 
     let lines = [], nearestDate=null, nearestDiff=Infinity;
@@ -647,14 +663,50 @@ function attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFm
       const diff = Math.abs(p.t-t0);
       if(diff<nearestDiff){ nearestDiff=diff; nearestDate=p.t; }
     });
-    if(!lines.length){ tooltip.style.opacity=0; return; }
+    if(!lines.length){ hideTooltip(); return; }
     const dateStr = nearestDate ? new Date(nearestDate).toISOString().slice(0,10) : '';
-    tooltip.innerHTML = `<div style="font-weight:600;margin-bottom:2px;">${dateStr}</div>` + lines.join('');
-    tooltip.style.left = (evt.clientX + window.scrollX) + 'px';
-    tooltip.style.top = (evt.clientY + window.scrollY) + 'px';
-    tooltip.style.opacity = 1;
+    showTooltipAt(evt.clientX, evt.clientY,
+      `<div style="font-weight:600;margin-bottom:2px;">${dateStr}</div>` + lines.join(''));
   }
-  function handleLeave(){ tooltip.style.opacity = 0; }
+  function handleLeave(){ hideTooltip(); }
+
+  hit.addEventListener('mousemove', handleMove);
+  hit.addEventListener('mouseleave', handleLeave);
+  hit.addEventListener('touchstart', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
+  hit.addEventListener('touchmove', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
+}
+
+function attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFmt){
+  const hit = svg.querySelector('#hoverHit');
+  if(!hit || !series.length) return;
+
+  function nearestInSeries(points, m0){
+    let best=points[0], bestDiff=Math.abs(points[0].x-m0);
+    points.forEach(p=>{
+      const diff=Math.abs(p.x-m0);
+      if(diff<bestDiff){ bestDiff=diff; best=p; }
+    });
+    return best;
+  }
+
+  function handleMove(evt){
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const scaleX = vb.width / rect.width;
+    const mouseX = (evt.clientX - rect.left) * scaleX;
+    if(mouseX < M.left || mouseX > M.left+plotW){ hideTooltip(); return; }
+    const m0 = xMin + (mouseX-M.left)/plotW*(xMax-xMin);
+
+    let lines = [];
+    series.forEach(s=>{
+      if(!s.points.length) return;
+      const p = nearestInSeries(s.points, m0);
+      lines.push(`<div><span style="color:${s.color}">\u25cf</span> ${s.label}: ${valueFmt(p.val)} @ ${p.x}y</div>`);
+    });
+    if(!lines.length){ hideTooltip(); return; }
+    showTooltipAt(evt.clientX, evt.clientY, lines.join(''));
+  }
+  function handleLeave(){ hideTooltip(); }
 
   hit.addEventListener('mousemove', handleMove);
   hit.addEventListener('mouseleave', handleLeave);
@@ -829,8 +881,12 @@ function renderCurveSnapshot(){
   pts.forEach(p=>{
     svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${color}"/>`);
   });
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
 
   svg.innerHTML = svgParts.join('');
+  attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x,
+    [{label: curveTypeLabel(curveType), color, points: pts.map(p=>({x:p.maturity_years, val:p.rate_pct}))}],
+    v=>v.toFixed(3)+'%');
   const dateNote = actualDate===wanted ? actualDate : `${actualDate} (nearest available to ${wanted})`;
   const measureNote = measure==='par' ? 'par yield (bootstrapped from spot)' : measure;
   legend.innerHTML = `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${curveTypeLabel(curveType)} — ${measureNote} — ${dateNote}</span>`;
