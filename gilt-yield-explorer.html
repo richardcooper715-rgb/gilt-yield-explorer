@@ -1,0 +1,1078 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gilt Yield Explorer</title>
+<style>
+  :root{
+    --paper:#F7F5EF;
+    --paper-panel:#FBFAF6;
+    --ink:#232A2E;
+    --ink-soft:#5B6469;
+    --line:#D8D2C2;
+    --nominal:#2A5C8A;
+    --real:#A8763E;
+    --cutover:#B04A3C;
+    --hover:#EFEAD9;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--paper);
+    color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    font-size:14px;
+  }
+  .app{ display:flex; flex-direction:column; min-height:100vh; }
+  header{
+    padding:20px 24px 16px;
+    border-bottom:1px solid var(--line);
+  }
+  header h1{
+    font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif;
+    font-weight:600;
+    font-size:22px;
+    margin:0 0 4px;
+    letter-spacing:0.2px;
+  }
+  header p{
+    margin:0;
+    color:var(--ink-soft);
+    font-size:13px;
+    line-height:1.5;
+    max-width:640px;
+  }
+  .layout{
+    display:flex;
+    flex:1;
+    min-height:0;
+    flex-direction:column;
+  }
+  @media (min-width: 860px){
+    .layout{ flex-direction:row; }
+  }
+  aside{
+    width:100%;
+    border-bottom:1px solid var(--line);
+    padding:14px 18px;
+  }
+  @media (min-width: 860px){
+    aside{
+      width:280px;
+      min-width:280px;
+      border-bottom:none;
+      border-right:1px solid var(--line);
+      overflow-y:auto;
+      max-height:calc(100vh - 90px);
+    }
+  }
+  .search{
+    width:100%;
+    padding:8px 10px;
+    border:1px solid var(--line);
+    border-radius:4px;
+    background:var(--paper-panel);
+    color:var(--ink);
+    font-size:13px;
+    margin-bottom:10px;
+  }
+  .sec-group-label{
+    font-size:11px;
+    text-transform:uppercase;
+    letter-spacing:0.6px;
+    color:var(--ink-soft);
+    margin:14px 0 6px;
+  }
+  .sec-item{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    padding:5px 6px;
+    border-radius:4px;
+    cursor:pointer;
+    font-size:12.5px;
+    line-height:1.3;
+  }
+  .sec-item:hover{ background:var(--hover); }
+  .sec-item input{ accent-color:var(--nominal); flex:none; }
+  .sec-item .swatch{
+    width:9px; height:9px; border-radius:2px; flex:none;
+  }
+  .sec-item .name{ flex:1; }
+  .sec-item .isin{ color:var(--ink-soft); font-size:10.5px; }
+
+  main{ flex:1; padding:18px 24px 24px; min-width:0; }
+  .controls{
+    display:flex; flex-wrap:wrap; gap:14px 22px;
+    margin-bottom:14px; align-items:center;
+  }
+  .toggle{ display:flex; align-items:center; gap:6px; font-size:12.5px; color:var(--ink-soft); }
+  .toggle input{ accent-color:var(--real); }
+  .toggle select, .toggle input[type=date]{
+    border:1px solid var(--line); border-radius:4px; background:var(--paper-panel);
+    color:var(--ink); font-size:12px; padding:3px 6px;
+  }
+  .view-tabs{ display:flex; gap:4px; margin-bottom:12px; flex-wrap:wrap; }
+  .view-tab{
+    border:1px solid var(--line); background:var(--paper-panel); color:var(--ink-soft);
+    font-size:12.5px; padding:6px 12px; border-radius:4px 4px 0 0; cursor:pointer;
+    font-family:inherit;
+  }
+  .view-tab:hover{ background:var(--hover); }
+  .view-tab.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .diff-pos{ fill:var(--nominal); }
+  .diff-neg{ fill:var(--cutover); }
+  .chart-wrap{
+    background:var(--paper-panel);
+    border:1px solid var(--line);
+    border-radius:6px;
+    padding:14px 10px 6px;
+  }
+  svg{ display:block; width:100%; height:auto; }
+  .axis text{ font-size:10.5px; fill:var(--ink-soft); }
+  .axis line, .axis path{ stroke:var(--line); }
+  .gridline{ stroke:var(--line); stroke-width:1; }
+  .cutover-line{ stroke:var(--cutover); stroke-width:1; stroke-dasharray:4 3; }
+  .cutover-label{ font-size:10px; fill:var(--cutover); }
+  .series-line{ fill:none; stroke-width:1.6; }
+  .curve-line{ fill:none; stroke-width:1.6; stroke-dasharray:1 3; stroke-linecap:round; }
+  .legend{ display:flex; flex-wrap:wrap; gap:14px; margin-top:10px; font-size:12px; color:var(--ink-soft); }
+  .legend-item{ display:flex; align-items:center; gap:6px; }
+  .legend-swatch{ width:16px; height:2px; }
+  .empty-state{
+    padding:60px 20px; text-align:center; color:var(--ink-soft); font-size:13px;
+  }
+  footer{
+    padding:10px 24px 18px; font-size:11px; color:var(--ink-soft);
+    border-top:1px solid var(--line);
+  }
+  .tooltip{
+    position:absolute; pointer-events:none; background:var(--ink); color:var(--paper);
+    font-size:11px; padding:5px 8px; border-radius:4px; opacity:0; transition:opacity .1s;
+    white-space:nowrap; transform:translate(-50%,-120%);
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <h1>Gilt Yield Explorer</h1>
+    <p>Per-security daily yields from DMO reference prices (1996–21 Jul 2017), extended with
+      Bank of England fitted nominal, real, and implied-inflation (BEI) curves — spot (zero
+      coupon) and forward — to the present day. Par yields are bootstrapped from the spot
+      curve, since BoE doesn't publish one.</p>
+  </header>
+
+  <div class="layout">
+    <aside>
+      <input class="search" id="search" placeholder="Search by name or ISIN…" />
+      <div id="sec-list"></div>
+    </aside>
+
+    <main>
+      <div class="view-tabs" id="viewTabs">
+        <button class="view-tab active" data-view="timeseries">Time Series</button>
+        <button class="view-tab" data-view="snapshot">Curve Snapshot</button>
+        <button class="view-tab" data-view="change">Curve Change</button>
+        <button class="view-tab" data-view="steepness">Curve Steepness</button>
+      </div>
+
+      <div class="controls" id="controls-timeseries">
+        <label class="toggle">
+          Show:
+          <select id="fieldSelect">
+            <option value="yield">Yield</option>
+            <option value="dirty_price">Dirty price</option>
+          </select>
+        </label>
+        <label class="toggle">
+          Period:
+          <select id="periodSelect">
+            <option value="1">1 month</option>
+            <option value="3">3 months</option>
+            <option value="6">6 months</option>
+            <option value="12">12 months</option>
+            <option value="36">36 months</option>
+            <option value="60">60 months</option>
+            <option value="all" selected>Since inception</option>
+          </select>
+        </label>
+        <label class="toggle"><input type="checkbox" id="showNominalCurve"> Overlay BoE nominal curve</label>
+        <label class="toggle"><input type="checkbox" id="showRealCurve"> Overlay BoE real curve</label>
+        <label class="toggle"><input type="checkbox" id="showInflationCurve"> Overlay BoE inflation (BEI) curve</label>
+        <label class="toggle">
+          Overlay measure:
+          <select id="overlayMeasure">
+            <option value="spot">Spot (zero coupon)</option>
+            <option value="forward">Forward</option>
+          </select>
+        </label>
+        <label class="toggle">
+          Maturity for overlay:
+          <select id="maturitySelect"></select>
+        </label>
+      </div>
+
+      <div class="controls" id="controls-snapshot" style="display:none;">
+        <label class="toggle">Date: <input type="date" id="snapshotDate"></label>
+        <label class="toggle">Curve: <select id="snapshotCurveType">
+          <option value="nominal">Nominal</option>
+          <option value="real">Real</option>
+          <option value="inflation">Implied inflation (BEI)</option>
+        </select></label>
+        <label class="toggle">Measure: <select id="snapshotMeasure">
+          <option value="spot">Spot (zero coupon)</option>
+          <option value="forward">Forward</option>
+          <option value="par">Par yield</option>
+        </select></label>
+      </div>
+
+      <div class="controls" id="controls-change" style="display:none;">
+        <label class="toggle">From: <input type="date" id="changeDateA"></label>
+        <label class="toggle">To: <input type="date" id="changeDateB"></label>
+        <label class="toggle">Curve: <select id="changeCurveType">
+          <option value="nominal">Nominal</option>
+          <option value="real">Real</option>
+          <option value="inflation">Implied inflation (BEI)</option>
+        </select></label>
+        <label class="toggle">Measure: <select id="changeMeasure">
+          <option value="spot">Spot (zero coupon)</option>
+          <option value="forward">Forward</option>
+          <option value="par">Par yield</option>
+        </select></label>
+        <label class="toggle"><input type="checkbox" id="showDiffPanel" checked> Show change (bps) panel</label>
+      </div>
+
+      <div class="controls" id="controls-steepness" style="display:none;">
+        <label class="toggle">Curve: <select id="steepnessCurveType">
+          <option value="nominal">Nominal</option>
+          <option value="real">Real</option>
+          <option value="inflation">Implied inflation (BEI)</option>
+        </select></label>
+        <label class="toggle">Measure: <select id="steepnessMeasure">
+          <option value="spot">Spot (zero coupon)</option>
+          <option value="forward">Forward</option>
+        </select></label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="2,10" checked> 2s10s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,20" checked> 10s20s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,30" checked> 10s30s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,40"> 10s40s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="20,30"> 20s30s</label>
+        <label class="toggle"><input type="checkbox" class="spread-toggle" value="30,40"> 30s40s</label>
+      </div>
+
+      <div class="chart-wrap">
+        <svg id="chart" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
+        <svg id="chart2" viewBox="0 0 900 160" preserveAspectRatio="xMidYMid meet" style="display:none; margin-top:8px;"></svg>
+        <div class="legend" id="legend"></div>
+      </div>
+    </main>
+  </div>
+
+  <footer id="footer-note">Loading dataset…</footer>
+</div>
+<div class="tooltip" id="tooltip"></div>
+
+<script>
+const COLORS = ["#2A5C8A","#A8763E","#5B7B4C","#7A4E8C","#B04A3C","#3E8B8B","#8C6E4E","#556B8C"];
+
+// Fixed "round number" maturities used for axis tick labels and the Time
+// Series overlay dropdown -- must match AXIS_MATURITIES in fetch_gilt_data.py.
+// The underlying curve data itself now carries every year 1-40 (for a
+// smoother/more accurate forward curve in particular), but we deliberately
+// don't clutter the axis or the dropdown with all 40 of those points.
+const AXIS_MATURITIES = [1,2,3,4,5,7,10,15,20,25,30,40];
+
+// Small embedded sample so this artifact renders something useful even
+// without gilt_yields.json present. Replace by running fetch_gilt_data.py
+// and serving the resulting file alongside this HTML.
+const SAMPLE_DATA = {
+  cutover_date: "2017-07-21",
+  securities: [
+    {
+      isin: "GB0009997999", name: "5% Treasury Stock 2018", type: "conventional",
+      series: genSeries("1998-01-05","2017-07-21", 5.6, -0.15, 0.35)
+    },
+    {
+      isin: "GB0031829509", name: "4¼% Treasury Gilt 2036", type: "conventional",
+      series: genSeries("2002-03-07","2017-07-21", 4.9, -0.10, 0.30)
+    },
+    {
+      isin: "GB0033280102", name: "2½% Index-linked Treasury Gilt 2024", type: "index_linked",
+      series: genSeries("2002-07-23","2017-07-21", 1.8, -0.22, 0.25)
+    },
+    {
+      isin: "GB00B128DH60", name: "0⅝% Index-linked Treasury Gilt 2040", type: "index_linked",
+      series: genSeries("2009-03-16","2017-07-21", 0.6, -0.28, 0.20)
+    }
+  ],
+  curves: {
+    nominal:   { spot: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 1.1, 0.35, 0),
+                 forward: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 1.1, 0.35, 0.25) },
+    real:      { spot: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], -1.6, 0.30, 0),
+                 forward: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], -1.6, 0.30, 0.2) },
+    inflation: { spot: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 2.7, 0.20, 0),
+                 forward: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 2.7, 0.20, 0.15) }
+  }
+};
+
+function genSeries(start,end,base,drift,noise){
+  const out=[]; let d=new Date(start); const e=new Date(end);
+  let v=base, price=100 - base*2;
+  while(d<=e){
+    if(d.getDay()!==0 && d.getDay()!==6 && d.getDate()%9===0){
+      v += (Math.random()-0.5)*noise + drift*0.01;
+      price += (Math.random()-0.5)*0.4 - drift*0.05;
+      out.push({date:d.toISOString().slice(0,10), yield: +v.toFixed(3), dirty_price: +price.toFixed(3)});
+    }
+    d.setDate(d.getDate()+1);
+  }
+  return out;
+}
+function genCurve(start,end,maturities,base,noise,slopeBoost){
+  const out=[]; let d=new Date(start); const e=new Date(end);
+  let vs = Object.fromEntries(maturities.map(m=>[m, base + m*(0.02+slopeBoost*0.01)]));
+  while(d<=e){
+    if(d.getDate()%20===0){
+      maturities.forEach(m=>{
+        vs[m]+= (Math.random()-0.5)*noise*0.05;
+        out.push({date:d.toISOString().slice(0,10), maturity_years:m, rate_pct:+vs[m].toFixed(3)});
+      });
+    }
+    d.setDate(d.getDate()+1);
+  }
+  return out;
+}
+
+const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield' };
+
+async function loadData(){
+  try{
+    const res = await fetch('./gilt_yields.json');
+    if(!res.ok) throw new Error('not found');
+    state.data = await res.json();
+    document.getElementById('footer-note').textContent =
+      `Loaded gilt_yields.json — generated ${state.data.generated || 'unknown'}. `+
+      `${state.data.securities.length} securities, cutover ${state.data.cutover_date}.`;
+  }catch(e){
+    state.data = SAMPLE_DATA;
+    document.getElementById('footer-note').textContent =
+      'Showing SAMPLE data (gilt_yields.json not found alongside this file — run fetch_gilt_data.py '+
+      'and place its output next to this HTML to see real DMO + BoE data).';
+  }
+  buildSecurityList();
+  buildMaturityOptions();
+  initDateInputs();
+  // pre-select first two securities
+  state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
+  render();
+}
+
+function buildSecurityList(){
+  const list = document.getElementById('sec-list');
+  const groups = { conventional: [], index_linked: [] };
+  state.data.securities.forEach(s=> (groups[s.type]||groups.conventional).push(s));
+
+  function renderGroup(label, arr){
+    if(!arr.length) return '';
+    return `<div class="sec-group-label">${label}</div>` + arr.map((s,i)=>{
+      const color = COLORS[(state.data.securities.indexOf(s))%COLORS.length];
+      return `<label class="sec-item" data-name="${s.name.toLowerCase()}" data-isin="${s.isin.toLowerCase()}">
+        <input type="checkbox" data-isin="${s.isin}">
+        <span class="swatch" style="background:${color}"></span>
+        <span class="name">${s.name}</span>
+        <span class="isin">${s.isin}</span>
+      </label>`;
+    }).join('');
+  }
+
+  list.innerHTML = renderGroup('Conventional', groups.conventional) +
+                    renderGroup('Index-linked', groups.index_linked);
+
+  list.querySelectorAll('input[type=checkbox]').forEach(cb=>{
+    cb.checked = state.selected.has(cb.dataset.isin);
+    cb.addEventListener('change', ()=>{
+      if(cb.checked) state.selected.add(cb.dataset.isin);
+      else state.selected.delete(cb.dataset.isin);
+      render();
+    });
+  });
+}
+
+function buildMaturityOptions(){
+  const sel = document.getElementById('maturitySelect');
+  const available = new Set(state.data.curves.nominal.spot.map(r=>r.maturity_years));
+  const mats = AXIS_MATURITIES.filter(m=>available.has(m));
+  sel.innerHTML = mats.map(m=>`<option value="${m}">${m}y</option>`).join('');
+  sel.value = mats.includes(10) ? 10 : mats[0];
+  state.maturity = +sel.value;
+  sel.addEventListener('change', ()=>{ state.maturity = +sel.value; render(); });
+}
+
+function curveDateRange(){
+  const dates = state.data.curves.nominal.spot.map(r=>r.date);
+  if(!dates.length) return null;
+  return { min: dates.reduce((a,b)=>a<b?a:b), max: dates.reduce((a,b)=>a>b?a:b) };
+}
+
+function initDateInputs(){
+  const range = curveDateRange();
+  if(!range) return;
+  const snap = document.getElementById('snapshotDate');
+  const a = document.getElementById('changeDateA');
+  const b = document.getElementById('changeDateB');
+  [snap,a,b].forEach(el=>{ el.min = range.min; el.max = range.max; });
+  snap.value = range.max;
+  a.value = range.min;
+  b.value = range.max;
+}
+
+// ---- par yield bootstrap ---------------------------------------------
+// BoE does not publish a par-yield curve (confirmed via their own FAQ --
+// only spot and forward are produced). This derives an approximate par
+// (semi-annual coupon) yield from the spot curve for a single date:
+// linearly interpolates the curated spot points to get the half-year
+// discount factors a real bootstrap needs, using BoE's stated
+// continuous-compounding convention. Approximate, not a market quote.
+
+function interpolateRate(curvePoints, t){
+  if(!curvePoints.length) return null;
+  if(t<=curvePoints[0].maturity_years) return curvePoints[0].rate_pct;
+  const last = curvePoints[curvePoints.length-1];
+  if(t>=last.maturity_years) return last.rate_pct;
+  for(let i=0;i<curvePoints.length-1;i++){
+    const a=curvePoints[i], b=curvePoints[i+1];
+    if(t>=a.maturity_years && t<=b.maturity_years){
+      const frac = (t-a.maturity_years)/(b.maturity_years-a.maturity_years);
+      return a.rate_pct + frac*(b.rate_pct-a.rate_pct);
+    }
+  }
+  return last.rate_pct;
+}
+
+function parYieldsFromSpot(curvePoints){
+  // curvePoints: sorted [{date, maturity_years, rate_pct}] for one date.
+  return curvePoints.map(({date, maturity_years:N})=>{
+    const periods = Math.round(N*2);
+    if(periods<1) return null;
+    let sumDF = 0;
+    for(let i=1;i<=periods;i++){
+      const t = i/2;
+      const z = interpolateRate(curvePoints, t);
+      sumDF += Math.exp(-z/100*t);
+    }
+    const zN = interpolateRate(curvePoints, N);
+    const DFn = Math.exp(-zN/100*N);
+    const parPct = 200*(1-DFn)/sumDF;
+    return { date, maturity_years:N, rate_pct: +parPct.toFixed(4) };
+  }).filter(Boolean);
+}
+
+// ---- shared chart helpers -------------------------------------------------
+
+function emptyState(W,H,msg){
+  return `<foreignObject x="0" y="0" width="${W}" height="${H}">
+    <div xmlns="http://www.w3.org/1999/xhtml" class="empty-state">${msg}</div></foreignObject>`;
+}
+
+function drawYAxis(svgParts, M, W, yLo, yHi, plotH, fmt, steps=5){
+  for(let i=0;i<=steps;i++){
+    const v = yLo + (yHi-yLo)*i/steps;
+    const yy = M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+    svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}"/>`);
+    svgParts.push(`<text class="axis" x="${M.left-8}" y="${yy+3}" text-anchor="end">${fmt(v)}</text>`);
+  }
+}
+
+function drawXAxisMaturity(svgParts, M, H, plotH, x, maturities){
+  maturities.forEach(m=>{
+    const xx = x(m);
+    svgParts.push(`<line class="gridline" x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
+    svgParts.push(`<text class="axis" x="${xx}" y="${H-8}" text-anchor="middle">${m}y</text>`);
+  });
+}
+
+function curveByDateMap(curveArray){
+  const map = new Map();
+  curveArray.forEach(r=>{
+    if(!map.has(r.date)) map.set(r.date, {});
+    map.get(r.date)[r.maturity_years] = r.rate_pct;
+  });
+  return map;
+}
+
+function nearestAvailableDate(curveArray, target){
+  const dates = [...new Set(curveArray.map(r=>r.date))];
+  if(!dates.length) return null;
+  const t = +new Date(target);
+  let best=dates[0], bestDiff=Math.abs(+new Date(dates[0])-t);
+  dates.forEach(d=>{
+    const diff = Math.abs(+new Date(d)-t);
+    if(diff<bestDiff){ bestDiff=diff; best=d; }
+  });
+  return best;
+}
+
+function curveOnDate(curveArray, date){
+  return curveArray.filter(r=>r.date===date).sort((a,b)=>a.maturity_years-b.maturity_years);
+}
+
+// ---- view tab wiring --------------------------------------------------
+
+document.querySelectorAll('.view-tab').forEach(btn=>{
+  btn.addEventListener('click', ()=>{
+    document.querySelectorAll('.view-tab').forEach(b=>b.classList.remove('active'));
+    btn.classList.add('active');
+    state.view = btn.dataset.view;
+    ['timeseries','snapshot','change','steepness'].forEach(v=>{
+      document.getElementById('controls-'+v).style.display = (v===state.view) ? 'flex' : 'none';
+    });
+    render();
+  });
+});
+
+document.getElementById('search').addEventListener('input', (e)=>{
+  const q = e.target.value.toLowerCase();
+  document.querySelectorAll('.sec-item').forEach(el=>{
+    const match = el.dataset.name.includes(q) || el.dataset.isin.includes(q);
+    el.style.display = match ? 'flex' : 'none';
+  });
+});
+document.getElementById('fieldSelect').addEventListener('change', e=>{ state.field = e.target.value; render(); });
+document.getElementById('periodSelect').addEventListener('change', render);
+document.getElementById('showNominalCurve').addEventListener('change', render);
+document.getElementById('showRealCurve').addEventListener('change', render);
+document.getElementById('showInflationCurve').addEventListener('change', render);
+document.getElementById('overlayMeasure').addEventListener('change', render);
+document.getElementById('snapshotDate').addEventListener('change', render);
+document.getElementById('snapshotCurveType').addEventListener('change', ()=>{ syncParAvailability('snapshot'); render(); });
+document.getElementById('snapshotMeasure').addEventListener('change', render);
+document.getElementById('changeDateA').addEventListener('change', render);
+document.getElementById('changeDateB').addEventListener('change', render);
+document.getElementById('changeCurveType').addEventListener('change', ()=>{ syncParAvailability('change'); render(); });
+document.getElementById('changeMeasure').addEventListener('change', render);
+document.getElementById('showDiffPanel').addEventListener('change', render);
+document.getElementById('steepnessCurveType').addEventListener('change', render);
+document.getElementById('steepnessMeasure').addEventListener('change', render);
+document.querySelectorAll('.spread-toggle').forEach(cb=>cb.addEventListener('change', render));
+
+// Par yield isn't a meaningful concept for the implied-inflation curve
+// (there's no "par BEI" instrument) -- disable that option when
+// inflation is selected, and fall back to spot if it was selected.
+function syncParAvailability(prefix){
+  const curveType = document.getElementById(prefix+'CurveType').value;
+  const measureSel = document.getElementById(prefix+'Measure');
+  const parOpt = [...measureSel.options].find(o=>o.value==='par');
+  if(!parOpt) return;
+  parOpt.disabled = (curveType==='inflation');
+  if(parOpt.disabled && measureSel.value==='par') measureSel.value = 'spot';
+}
+syncParAvailability('snapshot');
+syncParAvailability('change');
+
+// ---- render dispatch ----------------------------------------------------
+
+function render(){
+  if(!state.data) return;
+  if(state.view!=='change'){ document.getElementById('chart2').style.display='none'; }
+  if(state.view==='timeseries') renderTimeSeries();
+  else if(state.view==='snapshot') renderCurveSnapshot();
+  else if(state.view==='change') renderCurveChange();
+  else if(state.view==='steepness') renderSteepness();
+}
+
+function periodCutoffMonths(){
+  const val = document.getElementById('periodSelect').value;
+  return val==='all' ? null : parseInt(val,10);
+}
+
+function monthsAgo(dateMs, months){
+  const d = new Date(dateMs);
+  d.setMonth(d.getMonth()-months);
+  return +d;
+}
+
+function drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, periodMonths){
+  // Sparse year ticks for long/unbounded ranges (unchanged from before).
+  if(periodMonths===null || periodMonths>12){
+    const startYear = new Date(xMin).getFullYear();
+    const endYear = new Date(xMax).getFullYear();
+    for(let yr=startYear; yr<=endYear; yr+= Math.max(1,Math.round((endYear-startYear)/9))){
+      const t = +new Date(`${yr}-01-01`);
+      if(t<xMin||t>xMax) continue;
+      const xx = x(t);
+      svgParts.push(`<line class="gridline" x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
+      svgParts.push(`<text class="axis" x="${xx}" y="${H-8}" text-anchor="middle">${yr}</text>`);
+    }
+    return;
+  }
+  // Finer ticks for shorter windows: month-ends for 3/6 month views,
+  // quarter-ends for the 12 month view.
+  const stepMonths = periodMonths<=6 ? 1 : 3;
+  const fmt = periodMonths<=6
+    ? (d)=>d.toLocaleDateString('en-GB',{month:'short'})
+    : (d)=>`Q${Math.floor(d.getMonth()/3)+1} ${d.getFullYear()}`;
+  let d = new Date(xMin);
+  d.setDate(1); d.setMonth(d.getMonth()+1); d.setDate(0); // end of starting month
+  while(+d <= xMax){
+    if(+d>=xMin){
+      const xx = x(+d);
+      svgParts.push(`<line class="gridline" x1="${xx}" x2="${xx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
+      svgParts.push(`<text class="axis" x="${xx}" y="${H-8}" text-anchor="middle" font-size="9">${fmt(d)}</text>`);
+    }
+    d.setDate(d.getDate()+1); // step into next month
+    d.setMonth(d.getMonth()+stepMonths); d.setDate(0); // jump to end of that month
+  }
+}
+
+function showTooltipAt(clientX, clientY, html){
+  const tooltip = document.getElementById('tooltip');
+  tooltip.innerHTML = html;
+  // Keep the box on-screen near the left/right viewport edges: default
+  // centers on the cursor, but flips to hang off whichever side has room.
+  let tx = '-50%';
+  if(clientX < 110) tx = '0%';
+  else if(clientX > window.innerWidth - 150) tx = '-100%';
+  tooltip.style.transform = `translate(${tx}, -120%)`;
+  tooltip.style.left = (clientX + window.scrollX) + 'px';
+  tooltip.style.top = (clientY + window.scrollY) + 'px';
+  tooltip.style.opacity = 1;
+}
+function hideTooltip(){
+  document.getElementById('tooltip').style.opacity = 0;
+}
+
+function attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFmt){
+  const hit = svg.querySelector('#hoverHit');
+  if(!hit || !series.length) return;
+
+  function nearestInSeries(points, t0){
+    let lo=0, hi=points.length-1;
+    while(lo<hi){ const mid=(lo+hi)>>1; if(points[mid].t<t0) lo=mid+1; else hi=mid; }
+    let idx=lo;
+    if(lo>0 && Math.abs(points[lo-1].t-t0) < Math.abs(points[lo].t-t0)) idx=lo-1;
+    return points[idx];
+  }
+
+  function handleMove(evt){
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const scaleX = vb.width / rect.width;
+    const mouseX = (evt.clientX - rect.left) * scaleX;
+    if(mouseX < M.left || mouseX > M.left+plotW){ hideTooltip(); return; }
+    const t0 = xMin + (mouseX-M.left)/plotW*(xMax-xMin);
+
+    let lines = [], nearestDate=null, nearestDiff=Infinity;
+    series.forEach(s=>{
+      if(!s.points.length) return;
+      const p = nearestInSeries(s.points, t0);
+      lines.push(`<div><span style="color:${s.color}">\u25cf</span> ${s.label}: ${valueFmt(p.val)}</div>`);
+      const diff = Math.abs(p.t-t0);
+      if(diff<nearestDiff){ nearestDiff=diff; nearestDate=p.t; }
+    });
+    if(!lines.length){ hideTooltip(); return; }
+    const dateStr = nearestDate ? new Date(nearestDate).toISOString().slice(0,10) : '';
+    showTooltipAt(evt.clientX, evt.clientY,
+      `<div style="font-weight:600;margin-bottom:2px;">${dateStr}</div>` + lines.join(''));
+  }
+  function handleLeave(){ hideTooltip(); }
+
+  hit.addEventListener('mousemove', handleMove);
+  hit.addEventListener('mouseleave', handleLeave);
+  hit.addEventListener('touchstart', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
+  hit.addEventListener('touchmove', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
+}
+
+function attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series, valueFmt){
+  const hit = svg.querySelector('#hoverHit');
+  if(!hit || !series.length) return;
+
+  function nearestInSeries(points, m0){
+    let best=points[0], bestDiff=Math.abs(points[0].x-m0);
+    points.forEach(p=>{
+      const diff=Math.abs(p.x-m0);
+      if(diff<bestDiff){ bestDiff=diff; best=p; }
+    });
+    return best;
+  }
+
+  function handleMove(evt){
+    const rect = svg.getBoundingClientRect();
+    const vb = svg.viewBox.baseVal;
+    const scaleX = vb.width / rect.width;
+    const mouseX = (evt.clientX - rect.left) * scaleX;
+    if(mouseX < M.left || mouseX > M.left+plotW){ hideTooltip(); return; }
+    const m0 = xMin + (mouseX-M.left)/plotW*(xMax-xMin);
+
+    let lines = [];
+    series.forEach(s=>{
+      if(!s.points.length) return;
+      const p = nearestInSeries(s.points, m0);
+      lines.push(`<div><span style="color:${s.color}">\u25cf</span> ${s.label}: ${valueFmt(p.val)} @ ${p.x}y</div>`);
+    });
+    if(!lines.length){ hideTooltip(); return; }
+    showTooltipAt(evt.clientX, evt.clientY, lines.join(''));
+  }
+  function handleLeave(){ hideTooltip(); }
+
+  hit.addEventListener('mousemove', handleMove);
+  hit.addEventListener('mouseleave', handleLeave);
+  hit.addEventListener('touchstart', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
+  hit.addEventListener('touchmove', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
+}
+
+function renderTimeSeries(){
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:56};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const field = state.field;
+  const selectedSecs = state.data.securities.filter(s=>state.selected.has(s.isin));
+  const showNom = document.getElementById('showNominalCurve').checked;
+  const showReal = document.getElementById('showRealCurve').checked;
+  const showInfl = document.getElementById('showInflationCurve').checked;
+  const overlayMeasure = document.getElementById('overlayMeasure').value;
+  const periodMonths = periodCutoffMonths();
+
+  // Anchor "trailing N months" to the most recent date across whatever
+  // could be plotted, so the window always reflects the latest data --
+  // not necessarily today's date.
+  let rawDates = [];
+  selectedSecs.forEach(s=> s.series.forEach(p=>{
+    if(p[field]!==undefined && p[field]!==null) rawDates.push(+new Date(p.date));
+  }));
+  const overlayTypes = [];
+  if(field==='yield' && showNom) overlayTypes.push(['nominal', COLORS[0], 'BoE nominal']);
+  if(field==='yield' && showReal) overlayTypes.push(['real', COLORS[1], 'BoE real']);
+  if(field==='yield' && showInfl) overlayTypes.push(['inflation', COLORS[4], 'BoE implied inflation']);
+  overlayTypes.forEach(([ct])=>{
+    (state.data.curves[ct][overlayMeasure]||[]).forEach(r=>{
+      if(r.maturity_years===state.maturity) rawDates.push(+new Date(r.date));
+    });
+  });
+  let cutoff = -Infinity;
+  if(periodMonths!==null && rawDates.length){
+    cutoff = monthsAgo(Math.max(...rawDates), periodMonths);
+  }
+
+  let allPoints = [];
+  let tooltipSeries = [];
+  selectedSecs.forEach(s=>{
+    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff);
+    pts.forEach(p=>allPoints.push({date:p.date, val:p[field]}));
+    if(pts.length){
+      const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
+      tooltipSeries.push({label:s.name, color, points: pts.map(p=>({t:+new Date(p.date), val:p[field]}))});
+    }
+  });
+  const overlayCurves = {};
+  overlayTypes.forEach(([ct,color,label])=>{
+    const pts = (state.data.curves[ct][overlayMeasure]||[])
+      .filter(r=>r.maturity_years===state.maturity && +new Date(r.date)>=cutoff);
+    overlayCurves[ct] = pts;
+    pts.forEach(p=>allPoints.push({date:p.date, val:p.rate_pct}));
+    if(pts.length) tooltipSeries.push({
+      label:`${label} ${state.maturity}y (${overlayMeasure})`, color,
+      points: pts.map(p=>({t:+new Date(p.date), val:p.rate_pct}))
+    });
+  });
+
+  if(!allPoints.length){
+    svg.innerHTML = emptyState(W,H, field==='dirty_price'
+      ? 'No dirty price data for the current selection (curve overlays only apply to yield).'
+      : 'Select a security on the left, or enable a BoE curve overlay, to see the chart.');
+    legend.innerHTML=''; return;
+  }
+
+  const dates = allPoints.map(p=>+new Date(p.date));
+  const vals = allPoints.map(p=>p.val);
+  const xMin=Math.min(...dates), xMax=Math.max(...dates);
+  const yMin=Math.min(...vals), yMax=Math.max(...vals);
+  const yPad=(yMax-yMin)*0.1 || 0.5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = t => M.left + (t-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>field==='yield' ? v.toFixed(1)+'%' : v.toFixed(2));
+  drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, periodMonths);
+
+  const cutoverT = +new Date(state.data.cutover_date);
+  if(cutoverT>=xMin && cutoverT<=xMax){
+    const cx = x(cutoverT);
+    svgParts.push(`<line class="cutover-line" x1="${cx}" x2="${cx}" y1="${M.top}" y2="${M.top+plotH}"/>`);
+    svgParts.push(`<text class="cutover-label" x="${cx+4}" y="${M.top+10}">DMO series ends</text>`);
+  }
+
+  selectedSecs.forEach(s=>{
+    const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
+    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff)
+      .map(p=>`${x(+new Date(p.date))},${y(p[field])}`).join(' ');
+    if(pts) svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
+  });
+
+  overlayTypes.forEach(([ct,color])=>{
+    const pts = overlayCurves[ct];
+    if(pts && pts.length){
+      const linePts = pts.map(p=>`${x(+new Date(p.date))},${y(p.rate_pct)}`).join(' ');
+      svgParts.push(`<polyline class="curve-line" points="${linePts}" stroke="${color}"/>`);
+    }
+  });
+
+  // invisible hit-area for hover tooltips, on top of everything
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
+
+  svg.innerHTML = svgParts.join('');
+  attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, tooltipSeries,
+    v=>field==='yield' ? v.toFixed(3)+'%' : v.toFixed(3));
+
+  let legendHtml = selectedSecs.map(s=>{
+    const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
+    return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.name}</span>`;
+  }).join('');
+  overlayTypes.forEach(([ct,color,label])=>{
+    legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${color};border-top:2px dotted ${color}"></span>${label} ${state.maturity}y (${overlayMeasure})</span>`;
+  });
+  legend.innerHTML = legendHtml;
+}
+
+function curveTypeLabel(ct){
+  return ct==='nominal' ? 'Nominal' : ct==='real' ? 'Real' : 'Implied inflation (BEI)';
+}
+function curveTypeColor(ct){
+  return ct==='nominal' ? COLORS[0] : ct==='real' ? COLORS[1] : COLORS[4];
+}
+
+function renderCurveSnapshot(){
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:56};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const curveType = document.getElementById('snapshotCurveType').value;
+  const measure = document.getElementById('snapshotMeasure').value;
+  const wanted = document.getElementById('snapshotDate').value;
+  const spotArr = (state.data.curves[curveType]||{}).spot;
+  const sourceArr = measure==='par' ? spotArr : (state.data.curves[curveType]||{})[measure];
+  if(!sourceArr || !sourceArr.length || !wanted){
+    svg.innerHTML = emptyState(W,H,'No curve data available.');
+    legend.innerHTML=''; return;
+  }
+  const actualDate = nearestAvailableDate(sourceArr, wanted);
+  let pts = curveOnDate(sourceArr, actualDate);
+  if(measure==='par') pts = parYieldsFromSpot(pts);
+  if(!pts.length){
+    svg.innerHTML = emptyState(W,H,'No curve points for this date.');
+    legend.innerHTML=''; return;
+  }
+
+  const maturities = pts.map(p=>p.maturity_years);
+  const rates = pts.map(p=>p.rate_pct);
+  const xMin=Math.min(...maturities), xMax=Math.max(...maturities);
+  const yMin=Math.min(...rates), yMax=Math.max(...rates);
+  const yPad=(yMax-yMin)*0.15 || 0.5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = m => M.left + (m-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(2)+'%');
+  drawXAxisMaturity(svgParts, M, H, plotH, x, AXIS_MATURITIES.filter(m=>m>=xMin && m<=xMax));
+
+  const color = curveTypeColor(curveType);
+  const linePts = pts.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
+  svgParts.push(`<polyline class="series-line" points="${linePts}" stroke="${color}"/>`);
+  pts.forEach(p=>{
+    svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${color}"/>`);
+  });
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
+
+  svg.innerHTML = svgParts.join('');
+  attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x,
+    [{label: curveTypeLabel(curveType), color, points: pts.map(p=>({x:p.maturity_years, val:p.rate_pct}))}],
+    v=>v.toFixed(3)+'%');
+  const dateNote = actualDate===wanted ? actualDate : `${actualDate} (nearest available to ${wanted})`;
+  const measureNote = measure==='par' ? 'par yield (bootstrapped from spot)' : measure;
+  legend.innerHTML = `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${curveTypeLabel(curveType)} — ${measureNote} — ${dateNote}</span>`;
+}
+
+function renderCurveChange(){
+  const svg = document.getElementById('chart');
+  const chart2 = document.getElementById('chart2');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:56};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const curveType = document.getElementById('changeCurveType').value;
+  const measure = document.getElementById('changeMeasure').value;
+  const wantedA = document.getElementById('changeDateA').value;
+  const wantedB = document.getElementById('changeDateB').value;
+  const showDiff = document.getElementById('showDiffPanel').checked;
+  const spotArr = (state.data.curves[curveType]||{}).spot;
+  const sourceArr = measure==='par' ? spotArr : (state.data.curves[curveType]||{})[measure];
+
+  if(!sourceArr || !sourceArr.length || !wantedA || !wantedB){
+    svg.innerHTML = emptyState(W,H,'No curve data available.');
+    chart2.style.display='none'; legend.innerHTML=''; return;
+  }
+
+  const dateA = nearestAvailableDate(sourceArr, wantedA);
+  const dateB = nearestAvailableDate(sourceArr, wantedB);
+  let ptsA = curveOnDate(sourceArr, dateA);
+  let ptsB = curveOnDate(sourceArr, dateB);
+  if(measure==='par'){ ptsA = parYieldsFromSpot(ptsA); ptsB = parYieldsFromSpot(ptsB); }
+
+  if(!ptsA.length || !ptsB.length){
+    svg.innerHTML = emptyState(W,H,'No curve points for one or both dates.');
+    chart2.style.display='none'; legend.innerHTML=''; return;
+  }
+
+  const allMaturities = [...new Set([...ptsA.map(p=>p.maturity_years), ...ptsB.map(p=>p.maturity_years)])].sort((a,b)=>a-b);
+  const allRates = [...ptsA.map(p=>p.rate_pct), ...ptsB.map(p=>p.rate_pct)];
+  const xMin=Math.min(...allMaturities), xMax=Math.max(...allMaturities);
+  const yMin=Math.min(...allRates), yMax=Math.max(...allRates);
+  const yPad=(yMax-yMin)*0.15 || 0.5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = m => M.left + (m-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(2)+'%');
+  const axisMaturities = AXIS_MATURITIES.filter(m=>m>=xMin && m<=xMax);
+  drawXAxisMaturity(svgParts, M, H, plotH, x, axisMaturities);
+
+  const colorA = COLORS[0], colorB = COLORS[4];
+  const lineA = ptsA.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
+  const lineB = ptsB.map(p=>`${x(p.maturity_years)},${y(p.rate_pct)}`).join(' ');
+  svgParts.push(`<polyline class="series-line" points="${lineA}" stroke="${colorA}"/>`);
+  svgParts.push(`<polyline class="series-line" points="${lineB}" stroke="${colorB}"/>`);
+  ptsA.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorA}"/>`));
+  ptsB.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorB}"/>`));
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
+
+  svg.innerHTML = svgParts.join('');
+  attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, [
+    {label:`${dateA}`, color:colorA, points: ptsA.map(p=>({x:p.maturity_years, val:p.rate_pct}))},
+    {label:`${dateB}`, color:colorB, points: ptsB.map(p=>({x:p.maturity_years, val:p.rate_pct}))}
+  ], v=>v.toFixed(3)+'%');
+
+  let legendHtml = `<span class="legend-item"><span class="legend-swatch" style="background:${colorA}"></span>${curveTypeLabel(curveType)} (${measure}) — ${dateA}</span>`+
+    `<span class="legend-item"><span class="legend-swatch" style="background:${colorB}"></span>${curveTypeLabel(curveType)} (${measure}) — ${dateB}</span>`;
+
+  if(showDiff){
+    chart2.style.display='block';
+    const mapA = Object.fromEntries(ptsA.map(p=>[p.maturity_years,p.rate_pct]));
+    const mapB = Object.fromEntries(ptsB.map(p=>[p.maturity_years,p.rate_pct]));
+    const diffs = axisMaturities
+      .filter(m=>mapA[m]!==undefined && mapB[m]!==undefined)
+      .map(m=>({maturity:m, bps:(mapB[m]-mapA[m])*100}));
+
+    const W2=900,H2=160,M2={top:10,right:20,bottom:24,left:56};
+    const plotW2=W2-M2.left-M2.right, plotH2=H2-M2.top-M2.bottom;
+    const bpsVals = diffs.map(d=>d.bps);
+    const bMax = Math.max(Math.abs(Math.min(...bpsVals,0)), Math.abs(Math.max(...bpsVals,0)), 1) * 1.2;
+    const x2 = m => M2.left + (m-xMin)/(xMax-xMin||1) * plotW2;
+    const y2 = v => M2.top + plotH2/2 - (v/bMax) * (plotH2/2);
+    let parts2 = [];
+    parts2.push(`<line class="gridline" x1="${M2.left}" x2="${W2-M2.right}" y1="${y2(0)}" y2="${y2(0)}"/>`);
+    parts2.push(`<text class="axis" x="${M2.left-8}" y="${y2(0)+3}" text-anchor="end">0bp</text>`);
+    const sortedX = diffs.map(d=>x2(d.maturity)).sort((a,b)=>a-b);
+    let minGap = Infinity;
+    for(let i=1;i<sortedX.length;i++) minGap = Math.min(minGap, sortedX[i]-sortedX[i-1]);
+    if(!isFinite(minGap)) minGap = plotW2;
+    const barW = Math.max(3, Math.min(24, minGap*0.55));
+    diffs.forEach(d=>{
+      const xx = x2(d.maturity);
+      const yy0 = y2(0), yy1 = y2(d.bps);
+      const cls = d.bps>=0 ? 'diff-pos' : 'diff-neg';
+      parts2.push(`<rect class="${cls}" x="${xx-barW/2}" y="${Math.min(yy0,yy1)}" width="${barW}" height="${Math.abs(yy1-yy0)||1}"/>`);
+      parts2.push(`<text class="axis" x="${xx}" y="${H2-6}" text-anchor="middle">${d.maturity}y</text>`);
+    });
+    chart2.innerHTML = parts2.join('');
+    legendHtml += `<span class="legend-item">Bottom panel: change in bps (${dateB} minus ${dateA})</span>`;
+  } else {
+    chart2.style.display='none';
+  }
+
+  legend.innerHTML = legendHtml;
+}
+
+function renderSteepness(){
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:28,left:56};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const curveType = document.getElementById('steepnessCurveType').value;
+  const measure = document.getElementById('steepnessMeasure').value;
+  const curveArr = (state.data.curves[curveType]||{})[measure];
+  const pairs = [...document.querySelectorAll('.spread-toggle')]
+    .filter(cb=>cb.checked)
+    .map(cb=>cb.value.split(',').map(Number));
+
+  if(!curveArr || !curveArr.length || !pairs.length){
+    svg.innerHTML = emptyState(W,H,'Select at least one spread to display.');
+    legend.innerHTML=''; return;
+  }
+
+  const byDate = curveByDateMap(curveArr);
+  const series = pairs.map(([shortM,longM])=>{
+    const pts = [];
+    byDate.forEach((rates,date)=>{
+      if(rates[shortM]!==undefined && rates[longM]!==undefined){
+        pts.push({date, bps:(rates[longM]-rates[shortM])*100});
+      }
+    });
+    pts.sort((a,b)=>a.date.localeCompare(b.date));
+    return { label:`${shortM}s${longM}s`, pts };
+  }).filter(s=>s.pts.length);
+
+  if(!series.length){
+    svg.innerHTML = emptyState(W,H,'No overlapping maturity data for the selected spreads.');
+    legend.innerHTML=''; return;
+  }
+
+  const allDates = series.flatMap(s=>s.pts.map(p=>+new Date(p.date)));
+  const allBps = series.flatMap(s=>s.pts.map(p=>p.bps));
+  const xMin=Math.min(...allDates), xMax=Math.max(...allDates);
+  const yMin=Math.min(...allBps,0), yMax=Math.max(...allBps,0);
+  const yPad=(yMax-yMin)*0.1 || 5;
+  const yLo=yMin-yPad, yHi=yMax+yPad;
+
+  const x = t => M.left + (t-xMin)/(xMax-xMin||1) * plotW;
+  const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(0)+'bp');
+  drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, null);
+  if(yLo<0 && yHi>0){
+    const yy = y(0);
+    svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}" stroke-width="1.4"/>`);
+  }
+
+  let tooltipSeries = [];
+  series.forEach((s,i)=>{
+    const color = COLORS[i%COLORS.length];
+    const pts = s.pts.map(p=>`${x(+new Date(p.date))},${y(p.bps)}`).join(' ');
+    svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
+    tooltipSeries.push({label:s.label, color, points: s.pts.map(p=>({t:+new Date(p.date), val:p.bps}))});
+  });
+  svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
+
+  svg.innerHTML = svgParts.join('');
+  attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, tooltipSeries, v=>v.toFixed(1)+'bp');
+  legend.innerHTML = series.map((s,i)=>{
+    const color = COLORS[i%COLORS.length];
+    return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.label} (${curveType}, ${measure})</span>`;
+  }).join('');
+}
+
+loadData();
+</script>
+</body>
+</html>
