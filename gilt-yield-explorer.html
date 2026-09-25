@@ -123,6 +123,38 @@
   .view-tab.active{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
   .diff-pos{ fill:var(--nominal); }
   .diff-neg{ fill:var(--cutover); }
+  .toggle input[type=text]{
+    border:1px solid var(--line); border-radius:4px; background:var(--paper-panel);
+    color:var(--ink); font-size:12px; padding:3px 6px; width:150px;
+  }
+  .btn{
+    border:1px solid var(--line); background:var(--paper-panel); color:var(--ink);
+    font-size:12px; padding:5px 11px; border-radius:4px; cursor:pointer; font-family:inherit;
+  }
+  .btn:hover{ background:var(--hover); }
+  .btn-primary{ background:var(--ink); color:var(--paper); border-color:var(--ink); }
+  .btn-primary:hover{ opacity:0.9; }
+  .btn-small{ font-size:11px; padding:3px 8px; }
+  #portfolio-editor{
+    background:var(--paper-panel); border:1px solid var(--line); border-radius:6px;
+    padding:10px 12px; margin-bottom:14px;
+  }
+  .portfolio-row{
+    display:flex; align-items:center; gap:8px; padding:5px 0;
+    border-bottom:1px solid var(--line);
+  }
+  .portfolio-row:last-child{ border-bottom:none; }
+  .portfolio-row select{
+    flex:1; border:1px solid var(--line); border-radius:4px; background:var(--paper);
+    color:var(--ink); font-size:12.5px; padding:4px 6px;
+  }
+  .portfolio-row input[type=number]{
+    width:90px; border:1px solid var(--line); border-radius:4px; background:var(--paper);
+    color:var(--ink); font-size:12.5px; padding:4px 6px;
+  }
+  .portfolio-row .row-label{ font-size:11px; color:var(--ink-soft); white-space:nowrap; }
+  .portfolio-empty{ font-size:12.5px; color:var(--ink-soft); padding:6px 0; }
+  .portfolio-note{ font-size:11px; color:var(--ink-soft); margin-top:8px; line-height:1.5; }
   .chart-wrap{
     background:var(--paper-panel);
     border:1px solid var(--line);
@@ -176,6 +208,7 @@
         <button class="view-tab" data-view="snapshot">Curve Snapshot</button>
         <button class="view-tab" data-view="change">Curve Change</button>
         <button class="view-tab" data-view="steepness">Curve Steepness</button>
+        <button class="view-tab" data-view="portfolio">Portfolio Cashflows</button>
       </div>
 
       <div class="controls" id="controls-timeseries">
@@ -262,6 +295,25 @@
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="30,40"> 30s40s</label>
       </div>
 
+      <div class="controls" id="controls-portfolio" style="display:none;">
+        <label class="toggle">Portfolio name: <input type="text" id="portfolioName" placeholder="my_portfolio"></label>
+        <button class="btn" id="savePortfolioBtn">Save portfolio</button>
+        <button class="btn" id="loadPortfolioBtn">Load portfolio</button>
+        <input type="file" id="loadPortfolioFile" accept="application/json,.json" style="display:none;">
+        <label class="toggle">Show: <select id="cashflowTerms">
+          <option value="nominal">Nominal (£ actually received)</option>
+          <option value="real">Real (today's money)</option>
+        </select></label>
+      </div>
+
+      <div id="portfolio-editor" style="display:none;">
+        <div id="portfolio-rows"></div>
+        <button class="btn btn-small" id="addPortfolioRowBtn" style="margin-top:6px;">+ Add gilt</button>
+        <div class="portfolio-note">Units are £100 nominal each. Index-linked cashflows use DMO's published
+          Reference Index formula against known RPI history, then the BoE implied-inflation (BEI) curve to
+          project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.</div>
+      </div>
+
       <div class="chart-wrap">
         <svg id="chart" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
         <svg id="chart2" viewBox="0 0 900 160" preserveAspectRatio="xMidYMid meet" style="display:none; margin-top:8px;"></svg>
@@ -292,18 +344,22 @@ const SAMPLE_DATA = {
   securities: [
     {
       isin: "GB0009997999", name: "5% Treasury Stock 2018", type: "conventional",
+      redemption_date: "2028-03-07", coupon_pct: 5.0, first_price_date: "1998-01-05",
       series: genSeries("1998-01-05","2017-07-21", 5.6, -0.15, 0.35)
     },
     {
       isin: "GB0031829509", name: "4¼% Treasury Gilt 2036", type: "conventional",
+      redemption_date: "2036-03-07", coupon_pct: 4.25, first_price_date: "2002-03-07",
       series: genSeries("2002-03-07","2017-07-21", 4.9, -0.10, 0.30)
     },
     {
       isin: "GB0033280102", name: "2½% Index-linked Treasury Gilt 2024", type: "index_linked",
+      redemption_date: "2029-11-26", coupon_pct: 2.5, first_price_date: "2002-07-23",
       series: genSeries("2002-07-23","2017-07-21", 1.8, -0.22, 0.25)
     },
     {
       isin: "GB00B128DH60", name: "0⅝% Index-linked Treasury Gilt 2040", type: "index_linked",
+      redemption_date: "2040-03-16", coupon_pct: 0.625, first_price_date: "2009-03-16",
       series: genSeries("2009-03-16","2017-07-21", 0.6, -0.28, 0.20)
     }
   ],
@@ -314,7 +370,8 @@ const SAMPLE_DATA = {
                  forward: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], -1.6, 0.30, 0.2) },
     inflation: { spot: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 2.7, 0.20, 0),
                  forward: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 2.7, 0.20, 0.15) }
-  }
+  },
+  rpi_history: genRpiHistory("1987-01","2026-07", 100, 3.2)
 };
 
 function genSeries(start,end,base,drift,noise){
@@ -344,8 +401,18 @@ function genCurve(start,end,maturities,base,noise,slopeBoost){
   }
   return out;
 }
+function genRpiHistory(startMonth,endMonth,base,annualGrowthPct){
+  const out=[]; let d=new Date(startMonth+"-01"); const e=new Date(endMonth+"-01");
+  let v=base;
+  while(d<=e){
+    out.push({month: d.toISOString().slice(0,8)+"01", rpi: +v.toFixed(1)});
+    v *= Math.pow(1+annualGrowthPct/100, 1/12) * (1+(Math.random()-0.5)*0.003);
+    d.setMonth(d.getMonth()+1);
+  }
+  return out;
+}
 
-const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield' };
+const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield', portfolio:[] };
 
 async function loadData(){
   try{
@@ -366,6 +433,8 @@ async function loadData(){
   initDateInputs();
   // pre-select first two securities
   state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
+  if(state.data.securities.length) state.portfolio = [{isin: state.data.securities[0].isin, units: 100}];
+  renderPortfolioEditor();
   render();
 }
 
@@ -469,6 +538,165 @@ function parYieldsFromSpot(curvePoints){
   }).filter(Boolean);
 }
 
+// ---- portfolio cashflow engine ---------------------------------------
+// DMO's own indexation formula (igcalc.pdf): Reference Index for the 1st
+// of a month = the published RPI for the month falling `lag` months
+// earlier; for any other day, linearly interpolate between that and the
+// following month's 1st-of-month value. Index Ratio = RefIndex(payment
+// date) / RefIndex(first issue date). Gilts first issued from Sep 2005
+// onward use a 3-month lag; earlier ones use 8 months (DMO's own
+// history page). We don't have exact first-issue dates (DMO's "gilts in
+// issue" reference list is a PDF, not scraped) so first_price_date --
+// the earliest date in the security's own price series -- is used as a
+// proxy; it's normally within days/weeks of actual issue, which barely
+// moves a value that only changes month-to-month.
+const RPI_LAG_CUTOVER_DATE = "2005-09-01";
+
+function monthShift(monthStr, n){
+  const d = new Date(monthStr+"T00:00:00Z");
+  d.setUTCMonth(d.getUTCMonth()+n);
+  return d.toISOString().slice(0,8)+"01";
+}
+function daysInMonth(monthStr){
+  const d = new Date(monthStr+"T00:00:00Z");
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 0)).getUTCDate();
+}
+function yearsBetween(dateA, dateB){
+  return (new Date(dateB) - new Date(dateA)) / (365.25*86400000);
+}
+
+function rpiByMonthMap(rpiHistory){
+  const m = new Map();
+  (rpiHistory||[]).forEach(r=>m.set(r.month, r.rpi));
+  return m;
+}
+function latestKnownRpi(rpiHistory){
+  if(!rpiHistory || !rpiHistory.length) return null;
+  return rpiHistory[rpiHistory.length-1]; // fetch_gilt_data.py sorts by month
+}
+function latestInflationCurvePoints(){
+  const infl = (state.data.curves.inflation||{}).spot || [];
+  if(!infl.length) return [];
+  const latestDate = infl.reduce((a,b)=>a.date>b.date?a:b).date;
+  return curveOnDate(infl, latestDate);
+}
+
+// RPI for a given month, actual if known, otherwise projected forward
+// from the last known print using the current BEI curve.
+function rpiForMonth(monthStr, rpiMap, lastKnown, beiPoints){
+  if(rpiMap.has(monthStr)) return rpiMap.get(monthStr);
+  if(!lastKnown || !beiPoints.length) return null;
+  const yrs = yearsBetween(lastKnown.month, monthStr);
+  if(yrs<=0) return lastKnown.rpi; // shouldn't happen, but guard anyway
+  const bei = interpolateRate(beiPoints, yrs);
+  return lastKnown.rpi * Math.exp(bei/100*yrs);
+}
+
+function referenceIndex(dateStr, lagMonths, rpiMap, lastKnown, beiPoints){
+  const d = new Date(dateStr+"T00:00:00Z");
+  const monthOfDate = dateStr.slice(0,7)+"-01";
+  const refMonth1 = monthShift(monthOfDate, -lagMonths);
+  const refMonth2 = monthShift(monthOfDate, -lagMonths+1);
+  const rpi1 = rpiForMonth(refMonth1, rpiMap, lastKnown, beiPoints);
+  const rpi2 = rpiForMonth(refMonth2, rpiMap, lastKnown, beiPoints);
+  if(rpi1==null || rpi2==null) return null;
+  const dayOfMonth = d.getUTCDate();
+  const dim = daysInMonth(monthOfDate);
+  return rpi1 + (dayOfMonth-1)/dim * (rpi2-rpi1);
+}
+
+function lagMonthsFor(sec){
+  return (sec.first_price_date && sec.first_price_date >= RPI_LAG_CUTOVER_DATE) ? 3 : 8;
+}
+
+function indexRatioForDate(sec, dateStr, rpiMap, lastKnown, beiPoints){
+  if(!sec.first_price_date) return null;
+  const lag = lagMonthsFor(sec);
+  const base = referenceIndex(sec.first_price_date, lag, rpiMap, lastKnown, beiPoints);
+  const cur = referenceIndex(dateStr, lag, rpiMap, lastKnown, beiPoints);
+  if(base==null || cur==null || base===0) return null;
+  return cur/base;
+}
+
+// Coupon dates: semi-annual, on the redemption day/month, from `fromDate`
+// (inclusive) to and including `redemptionDate`. Standard gilt convention.
+function couponDatesFrom(redemptionDate, fromDate){
+  const dates = [];
+  let d = new Date(redemptionDate+"T00:00:00Z");
+  const from = new Date(fromDate+"T00:00:00Z");
+  // Walk forward from redemption in -6 month steps, collecting until we
+  // pass `from`, then reverse into ascending order.
+  let guard = 0;
+  while(+d >= +from && guard<400){
+    dates.push(d.toISOString().slice(0,10));
+    const next = new Date(d);
+    next.setUTCMonth(next.getUTCMonth()-6);
+    d = next;
+    guard++;
+  }
+  return dates.reverse();
+}
+
+// Generate {date, amount} cashflows for one held security from `fromDate`
+// onward. `amount` is the actual nominal £ paid (already inflation-
+// uplifted for index-linked gilts) -- real/nominal display terms are
+// applied afterwards, at aggregation time.
+function generateCashflows(sec, units, fromDate, rpiMap, lastKnown, beiPoints){
+  if(!sec.redemption_date || sec.coupon_pct==null || !units) return [];
+  const nominal = units*100;
+  const dates = couponDatesFrom(sec.redemption_date, fromDate);
+  if(!dates.length) return [];
+  const isIL = sec.type==='index_linked';
+  return dates.map((date,i)=>{
+    const isLast = i===dates.length-1;
+    let amount = (sec.coupon_pct/100/2)*nominal + (isLast ? nominal : 0);
+    if(isIL){
+      const ratio = indexRatioForDate(sec, date, rpiMap, lastKnown, beiPoints);
+      if(ratio==null) return null; // can't compute -- skip rather than guess
+      amount *= ratio;
+    }
+    return {date, amount};
+  }).filter(Boolean);
+}
+
+// Aggregate every held security's cashflows into per-year totals, split
+// by security so the chart can stack them.
+function aggregatePortfolioCashflows(terms){
+  const today = new Date().toISOString().slice(0,10);
+  const rpiMap = rpiByMonthMap(state.data.rpi_history);
+  const lastKnown = latestKnownRpi(state.data.rpi_history);
+  const beiPoints = latestInflationCurvePoints();
+
+  const bySecurity = []; // [{isin, name, byYear: Map(year->amount)}]
+  const yearsSet = new Set();
+  let anyUnsupported = false;
+
+  state.portfolio.forEach(({isin, units})=>{
+    const sec = state.data.securities.find(s=>s.isin===isin);
+    if(!sec || !units) return;
+    const flows = generateCashflows(sec, units, today, rpiMap, lastKnown, beiPoints);
+    if(sec.type==='index_linked' && !flows.length) anyUnsupported = true;
+    const byYear = new Map();
+    flows.forEach(f=>{
+      const yr = f.date.slice(0,4);
+      let amt = f.amount;
+      if(terms==='real'){
+        const yrs = yearsBetween(today, f.date);
+        if(yrs>0 && beiPoints.length){
+          const bei = interpolateRate(beiPoints, yrs);
+          amt = amt / Math.exp(bei/100*yrs);
+        }
+      }
+      byYear.set(yr, (byYear.get(yr)||0)+amt);
+      yearsSet.add(yr);
+    });
+    if(byYear.size) bySecurity.push({isin, name:sec.name, byYear});
+  });
+
+  const years = [...yearsSet].sort();
+  return { years, bySecurity, anyUnsupported };
+}
+
 // ---- shared chart helpers -------------------------------------------------
 
 function emptyState(W,H,msg){
@@ -525,9 +753,10 @@ document.querySelectorAll('.view-tab').forEach(btn=>{
     document.querySelectorAll('.view-tab').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     state.view = btn.dataset.view;
-    ['timeseries','snapshot','change','steepness'].forEach(v=>{
+    ['timeseries','snapshot','change','steepness','portfolio'].forEach(v=>{
       document.getElementById('controls-'+v).style.display = (v===state.view) ? 'flex' : 'none';
     });
+    document.getElementById('portfolio-editor').style.display = (state.view==='portfolio') ? 'block' : 'none';
     render();
   });
 });
@@ -571,6 +800,98 @@ function syncParAvailability(prefix){
 syncParAvailability('snapshot');
 syncParAvailability('change');
 
+// ---- portfolio editor UI -------------------------------------------------
+
+function securityOptionsHtml(selectedIsin){
+  return state.data.securities.map(s=>
+    `<option value="${s.isin}" ${s.isin===selectedIsin?'selected':''}>${s.name}</option>`
+  ).join('');
+}
+
+function renderPortfolioEditor(){
+  const wrap = document.getElementById('portfolio-rows');
+  if(!state.portfolio.length){
+    wrap.innerHTML = '<div class="portfolio-empty">No gilts added yet -- click "+ Add gilt" below.</div>';
+    return;
+  }
+  wrap.innerHTML = state.portfolio.map((row,i)=>`
+    <div class="portfolio-row" data-idx="${i}">
+      <select class="row-security">${securityOptionsHtml(row.isin)}</select>
+      <span class="row-label">units (£100 each):</span>
+      <input type="number" class="row-units" min="0" step="1" value="${row.units||''}">
+      <button class="btn btn-small row-remove" type="button">Remove</button>
+    </div>`).join('');
+
+  wrap.querySelectorAll('.portfolio-row').forEach(rowEl=>{
+    const idx = +rowEl.dataset.idx;
+    rowEl.querySelector('.row-security').addEventListener('change', e=>{
+      state.portfolio[idx].isin = e.target.value;
+      render();
+    });
+    rowEl.querySelector('.row-units').addEventListener('input', e=>{
+      state.portfolio[idx].units = +e.target.value || 0;
+      render();
+    });
+    rowEl.querySelector('.row-remove').addEventListener('click', ()=>{
+      state.portfolio.splice(idx,1);
+      renderPortfolioEditor();
+      render();
+    });
+  });
+}
+
+document.getElementById('addPortfolioRowBtn').addEventListener('click', ()=>{
+  const first = state.data.securities[0];
+  state.portfolio.push({ isin: first ? first.isin : '', units: 0 });
+  renderPortfolioEditor();
+  render();
+});
+document.getElementById('cashflowTerms').addEventListener('change', render);
+
+document.getElementById('savePortfolioBtn').addEventListener('click', ()=>{
+  const nameRaw = (document.getElementById('portfolioName').value||'portfolio').trim();
+  const safeName = (nameRaw.replace(/[^a-z0-9_-]+/gi,'_') || 'portfolio');
+  const payload = {
+    name: nameRaw,
+    saved: new Date().toISOString().slice(0,10),
+    holdings: state.portfolio.filter(r=>r.isin && r.units)
+      .map(r=>({ isin:r.isin, units:r.units }))
+  };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], {type:'application/json'});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = `${safeName}_portfolio.json`;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+});
+
+document.getElementById('loadPortfolioBtn').addEventListener('click', ()=>{
+  document.getElementById('loadPortfolioFile').click();
+});
+document.getElementById('loadPortfolioFile').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = () => {
+    let parsed;
+    try { parsed = JSON.parse(reader.result); }
+    catch(err){ alert('Could not read that file -- is it a portfolio JSON saved from this app?'); return; }
+    const holdings = Array.isArray(parsed.holdings) ? parsed.holdings : [];
+    const known = new Set(state.data.securities.map(s=>s.isin));
+    const missing = holdings.filter(h=>!known.has(h.isin));
+    state.portfolio = holdings.filter(h=>known.has(h.isin)).map(h=>({isin:h.isin, units:+h.units||0}));
+    if(parsed.name) document.getElementById('portfolioName').value = parsed.name;
+    renderPortfolioEditor();
+    render();
+    if(missing.length){
+      alert(`Loaded, but ${missing.length} holding(s) reference ISINs not in the `+
+            `current dataset and were skipped: ${missing.map(m=>m.isin).join(', ')}`);
+    }
+  };
+  reader.readAsText(file);
+  e.target.value = ''; // allow reloading the same filename later
+});
+
 // ---- render dispatch ----------------------------------------------------
 
 function render(){
@@ -580,6 +901,7 @@ function render(){
   else if(state.view==='snapshot') renderCurveSnapshot();
   else if(state.view==='change') renderCurveChange();
   else if(state.view==='steepness') renderSteepness();
+  else if(state.view==='portfolio') renderPortfolioChart();
 }
 
 function periodCutoffMonths(){
@@ -1080,6 +1402,80 @@ function renderSteepness(){
     const color = COLORS[i%COLORS.length];
     return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.label} (${curveType}, ${measure})</span>`;
   }).join('');
+}
+
+function renderPortfolioChart(){
+  const svg = document.getElementById('chart');
+  const legend = document.getElementById('legend');
+  const W=900,H=420,M={top:16,right:20,bottom:34,left:64};
+  const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
+
+  const terms = document.getElementById('cashflowTerms').value;
+  const agg = aggregatePortfolioCashflows(terms);
+
+  if(!agg.years.length){
+    svg.innerHTML = emptyState(W,H, state.portfolio.some(r=>r.isin && r.units)
+      ? 'No projectable cashflows for the current portfolio (missing redemption date, coupon, or RPI data for the holdings selected).'
+      : 'Add a gilt and enter units above to see projected cashflows.');
+    legend.innerHTML=''; return;
+  }
+
+  const years = agg.years;
+  const bandW = plotW/years.length;
+  const totals = years.map(yr => agg.bySecurity.reduce((s,sec)=>s+(sec.byYear.get(yr)||0),0));
+  const yMax = Math.max(...totals,1)*1.12;
+
+  const xIdx = i => M.left + i*bandW;
+  const y = v => M.top + plotH - (v/yMax)*plotH;
+
+  let svgParts = [];
+  drawYAxis(svgParts, M, W, 0, yMax, plotH, v=>'£'+Math.round(v).toLocaleString());
+  years.forEach((yr,i)=>{
+    const xx = xIdx(i)+bandW/2;
+    svgParts.push(`<text class="axis" x="${xx}" y="${H-14}" text-anchor="middle">${yr}</text>`);
+  });
+
+  const barW = Math.max(4, bandW*0.6);
+  years.forEach((yr,i)=>{
+    let cum = 0;
+    const xx = xIdx(i)+bandW/2;
+    agg.bySecurity.forEach((sec,si)=>{
+      const val = sec.byYear.get(yr)||0;
+      if(val<=0) return;
+      const color = COLORS[si%COLORS.length];
+      const y0=y(cum), y1=y(cum+val);
+      svgParts.push(`<rect fill="${color}" x="${xx-barW/2}" y="${y1}" width="${barW}" height="${Math.max(1,y0-y1)}"/>`);
+      cum += val;
+    });
+    svgParts.push(`<rect data-year="${yr}" x="${xx-barW/2}" y="${M.top}" width="${barW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
+  });
+
+  svg.innerHTML = svgParts.join('');
+
+  svg.querySelectorAll('rect[data-year]').forEach(el=>{
+    const yr = el.dataset.year;
+    const showFor = (clientX, clientY) => {
+      const rows = agg.bySecurity.map((sec,si)=>{
+        const val = sec.byYear.get(yr)||0;
+        if(val<=0) return '';
+        return `<div><span style="color:${COLORS[si%COLORS.length]}">\u25cf</span> ${sec.name}: `+
+               `£${val.toLocaleString(undefined,{maximumFractionDigits:0})}</div>`;
+      }).filter(Boolean).join('');
+      const total = agg.bySecurity.reduce((s,sec)=>s+(sec.byYear.get(yr)||0),0);
+      showTooltipAt(clientX, clientY,
+        `<div style="font-weight:600;margin-bottom:2px;">${yr} \u2014 total `+
+        `£${total.toLocaleString(undefined,{maximumFractionDigits:0})}</div>` + rows);
+    };
+    el.addEventListener('mousemove', evt=>showFor(evt.clientX, evt.clientY));
+    el.addEventListener('mouseleave', hideTooltip);
+    el.addEventListener('touchstart', evt=>{ if(evt.touches[0]) showFor(evt.touches[0].clientX, evt.touches[0].clientY); }, {passive:true});
+  });
+
+  legend.innerHTML = agg.bySecurity.map((sec,si)=>
+    `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[si%COLORS.length]}"></span>${sec.name}</span>`
+  ).join('') + (agg.anyUnsupported
+    ? `<span class="legend-item" style="color:var(--cutover)">Some index-linked holdings couldn't be projected (missing RPI/curve data)</span>`
+    : '') + `<span class="legend-item">Showing ${terms==='real' ? "real (today's money)" : 'nominal (actual £ received)'} terms</span>`;
 }
 
 loadData();

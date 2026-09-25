@@ -2,7 +2,7 @@
 """
 fetch_gilt_data.py
 
-Builds gilt_yields.json for the Gilt Yield Explorer chart, from two
+Builds gilt_yields.json for the Gilt Yield Explorer chart, from three
 free public sources:
 
   1. DMO historical gilt reference prices & yields (25 Nov 2002 - 21 Jul 2017
@@ -55,6 +55,25 @@ free public sources:
      updated daily, and overlays it on top of the archive data to close
      that gap.
 
+  3. DMO's published UK RPI history (report D4O, back to June 1980)
+     https://www.dmo.gov.uk/data/gilt-market/index-linked-gilts
+     -> feeds the Portfolio Cashflows tab, which needs to compute each
+        index-linked gilt's Reference Index / Index Ratio itself. DMO's
+        own reference list of gilts in issue (which would give the base
+        RPI and lag type directly) is a PDF, not scraped here -- instead
+        each security's first_price_date (already available, no new
+        fetch needed) is used as a proxy for its first issue date, from
+        which the app derives both the lag type (3-month from 2005-06
+        onward, 8-month before) and the base Reference Index, following
+        DMO's own published formula (igcalc.pdf). RPI history only
+        covers actual published prints; cashflow dates beyond the last
+        known print are projected using the BEI curve above.
+     This part is NOT scraped automatically -- DMO blocks scripted
+     requests to this data endpoint with ShieldSquare bot-detection
+     (confirmed; same as the historical gilt-price page below). Like
+     DMO_RAW_DIR, this needs a manually-downloaded export in RPI_RAW_DIR
+     (see fetch_rpi_history's docstring for exact steps).
+
 Run:
 
     pip install requests beautifulsoup4 openpyxl xlrd pandas
@@ -62,6 +81,8 @@ Run:
     python fetch_gilt_data.py --only boe-latest   # fast daily refresh
     python fetch_gilt_data.py --only dmo          # e.g. after adding new
                                                    # dmo_raw/ files
+    python fetch_gilt_data.py --only rpi          # after adding/updating
+                                                   # a file in rpi_raw/
     python fetch_gilt_data.py --only dmo,boe-archive
 
 Skipped components reuse their data from the existing gilt_yields.json
@@ -107,6 +128,7 @@ BOE_LATEST_ZIP_URL = ("https://www.bankofengland.co.uk/-/media/boe/files/"
                        "statistics/yield-curves/latest-yield-curve-data.zip")
 
 DMO_RAW_DIR = "./dmo_raw"  # put manually-downloaded DMO yearly files here
+RPI_RAW_DIR = "./rpi_raw"  # put a manually-downloaded DMO RPI Data export here
 
 CUTOVER_DATE = "2017-07-21"  # last DMO reference price date
 
@@ -181,6 +203,32 @@ def discover_dmo_year_files():
     print(f"Found {len(year_files)} local DMO yearly files in {DMO_RAW_DIR}/: "
           f"{sorted(year_files)}")
     return year_files
+
+
+FRACTION_MAP = {
+    "\u215b": 0.125, "\u00bc": 0.25, "\u215c": 0.375, "\u00bd": 0.5,
+    "\u215d": 0.625, "\u00be": 0.75, "\u215e": 0.875,
+    "\u2153": 1 / 3, "\u2154": 2 / 3,
+}
+
+
+def parse_coupon_pct(name):
+    """UK gilt names always lead with the coupon rate, e.g. '4\u00bd% Treasury
+    Gilt 2028' or '0\u215b% Index-linked Treasury Gilt 2029'. Handles both
+    the unicode-fraction style (older/most DMO naming) and plain decimals
+    (e.g. '0.125%'). Returns None for names that don't parse (e.g. the
+    handful of old floating-rate gilts, which don't have a fixed coupon).
+    """
+    m = re.match(r"^\s*(\d+)?([\u215b\u00bc\u215c\u00bd\u215d\u00be\u215e"
+                 r"\u2153\u2154])?\s*%", name)
+    if m and (m.group(1) or m.group(2)):
+        whole = float(m.group(1)) if m.group(1) else 0.0
+        frac = FRACTION_MAP.get(m.group(2), 0.0) if m.group(2) else 0.0
+        return whole + frac
+    m2 = re.match(r"^\s*(\d+(?:\.\d+)?)\s*%", name)
+    if m2:
+        return float(m2.group(1))
+    return None
 
 
 def parse_dmo_year_file(year, path):
@@ -278,6 +326,9 @@ def parse_dmo_year_file(year, path):
     df["yield"] = df["yield_parsed"]
     df["dirty_price"] = (pd.to_numeric(df["dirty_price"], errors="coerce")
                           if "dirty_price" in df.columns else float("nan"))
+    df["redemption_date_parsed"] = (
+        pd.to_datetime(df["redemption_date"], errors="coerce")
+        if "redemption_date" in df.columns else pd.NaT)
     df = df.dropna(subset=["date", "isin", "yield"])
 
     rows = []
@@ -285,6 +336,7 @@ def parse_dmo_year_file(year, path):
         name = str(r.get("name", "")).strip()
         is_il = bool(re.search(r"index.?linked|\bIL\b", name, re.IGNORECASE))
         dp = r.get("dirty_price")
+        rd = r.get("redemption_date_parsed")
         rows.append({
             "date": r["date"].strftime("%Y-%m-%d"),
             "isin": str(r["isin"]).strip(),
@@ -292,6 +344,9 @@ def parse_dmo_year_file(year, path):
             "type": "index_linked" if is_il else "conventional",
             "yield": float(r["yield"]),
             "dirty_price": None if pd.isna(dp) else float(dp),
+            "redemption_date": (rd.strftime("%Y-%m-%d")
+                                 if rd is not None and not pd.isna(rd) else None),
+            "coupon_pct": parse_coupon_pct(name),
         })
     print(f"  [{year}] parsed {len(rows)} rows")
     return rows
@@ -312,8 +367,17 @@ def build_dmo_dataset():
             "isin": row["isin"],
             "name": row["name"],
             "type": row["type"],
+            "redemption_date": row["redemption_date"],
+            "coupon_pct": row["coupon_pct"],
             "series": [],
         })
+        # A security's name/redemption_date/coupon are constant, but rows
+        # from different years could disagree on redemption_date if DMO
+        # ever corrected it -- keep the latest non-null value seen.
+        if row["redemption_date"]:
+            sec["redemption_date"] = row["redemption_date"]
+        if row["coupon_pct"] is not None:
+            sec["coupon_pct"] = row["coupon_pct"]
         sec["series"].append({
             "date": row["date"],
             "yield": row["yield"],
@@ -322,6 +386,12 @@ def build_dmo_dataset():
 
     for sec in securities.values():
         sec["series"].sort(key=lambda p: p["date"])
+        # Proxy for first issue date -- used client-side to infer each
+        # index-linked gilt's indexation lag (3-month for gilts first
+        # issued from 2005-06 onward, 8-month before that) and as the
+        # base date for its index ratio calculation, since DMO's own
+        # "gilts in issue" reference list (a PDF) isn't scraped here.
+        sec["first_price_date"] = sec["series"][0]["date"] if sec["series"] else None
 
     return list(securities.values())
 
@@ -550,6 +620,210 @@ def merge_curve_overlay(base, overlay):
 
 
 # ---------------------------------------------------------------------------
+# RPI history (for index-linked gilt cashflow projections)
+# ---------------------------------------------------------------------------
+
+DMO_RPI_REPORT_URL = "https://www.dmo.gov.uk/data/XmlDataReport?reportCode=D4O"
+
+
+def _try_parse_rpi_response(raw, content_type):
+    """Attempt to parse a response body as RPI data in XML/Excel/CSV.
+    Returns a DataFrame or None if nothing recognisable came back."""
+    df = None
+    if "xml" in content_type or raw.lstrip()[:1] == b"<":
+        try:
+            df = pd.read_xml(io.BytesIO(raw), parser="etree")
+        except Exception:
+            pass
+    if df is None:
+        try:
+            df = pd.read_excel(io.BytesIO(raw))
+        except Exception:
+            pass
+    if df is None:
+        try:
+            candidate = pd.read_csv(io.BytesIO(raw))
+            # A 1-column "DataFrame" usually means we CSV-parsed an HTML
+            # page by accident (one long "line" per row) -- reject it.
+            if candidate.shape[1] > 1:
+                df = candidate
+        except Exception:
+            pass
+    return df
+
+
+def discover_rpi_raw_files():
+    """Files the user has manually downloaded into RPI_RAW_DIR (DMO's RPI
+    Data report, exported via a real browser -- see fetch_rpi_history's
+    docstring for why this is necessary rather than fetched directly)."""
+    if not os.path.isdir(RPI_RAW_DIR):
+        return []
+    return sorted(
+        os.path.join(RPI_RAW_DIR, fn) for fn in os.listdir(RPI_RAW_DIR)
+        if fn.lower().endswith((".xls", ".xlsx", ".csv")))
+
+
+def parse_rpi_raw_file(path):
+    try:
+        df = pd.read_excel(path)
+    except Exception:
+        try:
+            df = pd.read_csv(path)
+        except Exception as e:
+            print(f"  could not read {path}: {e}")
+            return []
+    rows = _rows_from_rpi_dataframe(df)
+    print(f"  parsed {len(rows)} months from {path}")
+    return rows
+
+
+def fetch_rpi_history():
+    """Get DMO's published UK RPI history (report D4O), which goes back
+    to June 1980. Used by the app to compute index-linked gilts' Reference
+    Index / Index Ratio itself (per DMO's own published formula -- see
+    igcalc.pdf), rather than needing DMO's separate PDF reference list of
+    gilts in issue.
+
+    CONFIRMED: DMO blocks scripted requests to this data endpoint with
+    ShieldSquare bot-detection (same thing that blocked the historical
+    gilt-price page early in this project) -- both the interactive
+    report page and its supposed XML feed return a "ShieldSquare Block"
+    page rather than data, regardless of URL. So, like the DMO yearly
+    price files (DMO_RAW_DIR), this now expects a manually-downloaded
+    copy in RPI_RAW_DIR:
+
+        1. Visit https://www.dmo.gov.uk/data/gilt-market/index-linked-gilts
+           in a real browser and open the "RPI data" report.
+        2. Export/download it (CSV or Excel).
+        3. Save the file into ./rpi_raw/ next to this script (any
+           filename works, as long as it ends .csv/.xls/.xlsx).
+
+    The web-fetch attempt below is kept as a fallback in case DMO ever
+    lifts the block, but given it's confirmed blocked, don't expect it
+    to work -- the manual-file path is the real one.
+
+    Returns a list of {"month": "YYYY-MM-01", "rpi": float}, sorted by
+    month, or an empty list if no data could be found (in which case
+    the app falls back to BEI-only projection with no historical RPI
+    anchor -- print output will make this failure obvious).
+    """
+    raw_files = discover_rpi_raw_files()
+    if raw_files:
+        print(f"  found {len(raw_files)} manually-downloaded RPI file(s) "
+              f"in {RPI_RAW_DIR}: {raw_files}")
+        rows = []
+        for path in raw_files:
+            rows.extend(parse_rpi_raw_file(path))
+        # de-dupe by month (in case of overlapping manual exports), keep
+        # the last-seen value for any repeated month.
+        by_month = {r["month"]: r["rpi"] for r in rows}
+        out = sorted(({"month": m, "rpi": v} for m, v in by_month.items()),
+                      key=lambda r: r["month"])
+        if out:
+            return out
+        print(f"  WARNING: found files in {RPI_RAW_DIR} but couldn't "
+              f"parse any RPI rows from them -- falling back to the "
+              f"(likely blocked) web fetch below for diagnostics.")
+
+    url_variants = [
+        DMO_RPI_REPORT_URL,
+        # Fallback only -- this is DMO's interactive report page, not a
+        # data file, but kept in case the XML endpoint above ever moves.
+        "https://www.dmo.gov.uk/data/ExportReport?reportCode=D4O",
+    ]
+
+    last_html_resp = None
+    last_html_url = None
+    for url in url_variants:
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"  could not fetch {url}: {e}")
+            continue
+
+        content_type = resp.headers.get("Content-Type", "").lower()
+        if "html" in content_type:
+            last_html_resp = resp  # keep the page itself for link-scanning below
+            last_html_url = url
+            continue
+
+        df = _try_parse_rpi_response(resp.content, content_type)
+        if df is not None and not df.empty:
+            print(f"  RPI history: {url} worked ({content_type})")
+            return _rows_from_rpi_dataframe(df)
+
+    # Nothing worked directly -- scan the HTML report page for a real
+    # download link, so we know what to try next rather than guessing blind.
+    if last_html_resp is not None:
+        soup = BeautifulSoup(last_html_resp.text, "html.parser")
+        title = soup.title.string.strip() if soup.title and soup.title.string else "(no title)"
+        candidates = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            hl = href.lower()
+            if any(k in hl for k in (".csv", ".xlsx", ".xls", ".xml",
+                                      "download", "export", "/media/")):
+                candidates.append(href)
+
+        # Same bot-detection block that hit DMO's historical-prices page
+        # earlier in this project (ShieldSquare) -- check for it here too,
+        # since "a data endpoint returns HTML" is exactly what that looks
+        # like, and a candidate-link scan can't fix a block page anyway.
+        page_text = soup.get_text(" ", strip=True).lower()
+        block_markers = ["shieldsquare", "captcha", "access denied",
+                         "request unsuccessful", "blocked"]
+        hit_markers = [m for m in block_markers if m in page_text]
+
+        print(f"  WARNING: RPI report URL(s) returned HTML, not data. "
+              f"Last tried: {last_html_url} -- page title: {title!r}. "
+              f"Found {len(candidates)} candidate link(s) that might be "
+              f"the real download: {candidates!r}.")
+        if hit_markers:
+            print(f"  This looks like a bot-detection block page "
+                  f"(matched: {hit_markers!r}) -- same kind of thing that "
+                  f"blocked DMO's historical-prices page earlier in this "
+                  f"project, not a wrong URL. Likely needs a different "
+                  f"approach (e.g. manual download) rather than a URL fix.")
+        else:
+            print(f"  Not an obvious bot-block page -- if one of the "
+                  f"candidate links above looks right, or the title/first "
+                  f"part of the page suggests what's actually going on, "
+                  f"report it back and I'll adjust.")
+    else:
+        print("  WARNING: could not fetch any RPI report URL variant.")
+    return []
+
+
+def _rows_from_rpi_dataframe(df):
+    # Column names are unconfirmed -- match by keyword like the DMO price
+    # files, rather than assuming exact names.
+    cols = {str(c).strip().lower(): c for c in df.columns}
+    date_col = next((cols[c] for c in cols if "date" in c or "month" in c
+                      or "period" in c), None)
+    rpi_col = next((cols[c] for c in cols if "rpi" in c or "index" in c),
+                    None)
+    if date_col is None or rpi_col is None:
+        print(f"  WARNING: RPI history parsed ({len(df)} rows) but "
+              f"couldn't identify date/RPI columns. Columns found: "
+              f"{list(df.columns)!r}. First 3 rows:\n{df.head(3)}")
+        return []
+
+    out = []
+    for _, r in df.iterrows():
+        d = pd.to_datetime(r[date_col], errors="coerce")
+        v = pd.to_numeric(r[rpi_col], errors="coerce")
+        if pd.isna(d) or pd.isna(v):
+            continue
+        out.append({"month": d.strftime("%Y-%m-01"), "rpi": float(v)})
+    out.sort(key=lambda r: r["month"])
+    print(f"  parsed {len(out)} months of RPI history "
+          f"({out[0]['month'] if out else '?'} to "
+          f"{out[-1]['month'] if out else '?'})")
+    return out
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -559,13 +833,13 @@ def main():
     parser.add_argument(
         "--only", default="all",
         help=("Comma-separated components to run: dmo, boe-archive, "
-              "boe-latest, or 'all' (default). Skipped components reuse "
-              "their data from the existing gilt_yields.json if present. "
-              "E.g. --only boe-latest for a fast daily refresh; "
+              "boe-latest, rpi, or 'all' (default). Skipped components "
+              "reuse their data from the existing gilt_yields.json if "
+              "present. E.g. --only boe-latest for a fast daily refresh; "
               "--only dmo,boe-archive to skip the daily-only piece."))
     args = parser.parse_args()
 
-    valid = {"dmo", "boe-archive", "boe-latest"}
+    valid = {"dmo", "boe-archive", "boe-latest", "rpi"}
     components = valid if args.only == "all" else set(args.only.split(","))
     unknown = components - valid
     if unknown:
@@ -613,6 +887,21 @@ def main():
     else:
         print("\n=== Skipping BoE latest (--only) ===")
 
+    # --- RPI history (for index-linked gilt cashflow projections) ---
+    if "rpi" in components:
+        print("\n=== Fetching DMO RPI history ===")
+        rpi_history = fetch_rpi_history()
+        if not rpi_history and previous and previous.get("rpi_history"):
+            rpi_history = previous["rpi_history"]
+            print(f"  fetch returned nothing (likely blocked, or no file "
+                  f"in {RPI_RAW_DIR} on this machine) -- keeping the "
+                  f"{len(rpi_history)} months already in gilt_yields.json "
+                  f"rather than overwriting them with an empty result.")
+    else:
+        rpi_history = (previous or {}).get("rpi_history", [])
+        print(f"\n=== Skipping RPI history (--only) -- reusing "
+              f"{len(rpi_history)} months from existing gilt_yields.json ===")
+
     output = {
         "generated": datetime.utcnow().isoformat() + "Z",
         "cutover_date": CUTOVER_DATE,
@@ -636,10 +925,20 @@ def main():
             f"under GitHub's 100MB push limit): only "
             f"{AXIS_MATURITIES} years before {GRANULARITY_CUTOVER_DATE}, "
             f"all of {KEEP_MATURITIES[0]}-{KEEP_MATURITIES[-1]} (every "
-            f"year) from {GRANULARITY_CUTOVER_DATE} onward."
+            f"year) from {GRANULARITY_CUTOVER_DATE} onward. "
+            "securities[].redemption_date, .coupon_pct (parsed from the "
+            "name), and .first_price_date (proxy for first issue date, "
+            "used to infer each index-linked gilt's indexation lag and "
+            "as the base date for its index ratio -- DMO's own 'gilts in "
+            "issue' reference list is a PDF and isn't scraped here) are "
+            "for the app's Portfolio Cashflows tab. rpi_history[]: "
+            "DMO's published UK RPI series (report D4O), used the same "
+            "way, per DMO's published Reference Index formula (see "
+            "igcalc.pdf) -- computed client-side, not by this script."
         ),
         "securities": securities,
         "curves": curves,
+        "rpi_history": rpi_history,
     }
 
     with open("gilt_yields.json", "w") as f:
@@ -650,7 +949,7 @@ def main():
         f"{len(curves.get(c, {}).get('forward', []))}fwd"
         for c in BOE_CURVE_TYPES)
     print(f"\nWrote gilt_yields.json: {len(securities)} securities, "
-          f"curves: {curve_summary}.")
+          f"curves: {curve_summary}, rpi_history: {len(rpi_history)} months.")
 
 
 if __name__ == "__main__":
@@ -668,6 +967,9 @@ if __name__ == "__main__":
 #       "isin": "GB00...",
 #       "name": "5% Treasury Gilt 2025",
 #       "type": "conventional" | "index_linked",
+#       "redemption_date": "2025-03-07" | null,
+#       "coupon_pct": 5.0 | null,           # parsed from name; null for floaters
+#       "first_price_date": "2003-01-06",   # proxy for first issue date
 #       "series": [{"date": "1998-01-05", "yield": 6.23, "dirty_price": 99.41}, ...]
 #     }, ...
 #   ],
@@ -676,7 +978,8 @@ if __name__ == "__main__":
 #                   "forward": [...same shape...]},
 #     "real":      {"spot": [...], "forward": [...]},
 #     "inflation": {"spot": [...], "forward": [...]}   # implied BEI, published directly by BoE
-#   }
+#   },
+#   "rpi_history": [{"month": "1987-01-01", "rpi": 100.0}, ...]   # DMO report D4O
 #   # No "par" key -- BoE doesn't publish par yields; the app derives them
 #   # client-side from curves.<type>.spot via a standard bootstrap.
 #   # Maturity coverage is date-dependent: only AXIS_MATURITIES (12
