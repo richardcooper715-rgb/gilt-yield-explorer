@@ -228,6 +228,14 @@ def parse_coupon_pct(name):
     m2 = re.match(r"^\s*(\d+(?:\.\d+)?)\s*%", name)
     if m2:
         return float(m2.group(1))
+    # Tradeweb-style naming, e.g. "Treasury Gilt 4.25 12/46" or
+    # "Treasury Gilt IL 0.125 03/29" -- coupon as a plain decimal after
+    # "Gilt" (and an optional "IL" marker), no leading/trailing %. Seen
+    # in the user's manually-added post-2017 Tradeweb file, which uses a
+    # different naming convention to DMO's own historical files.
+    m3 = re.search(r"\bGilt\b\s+(?:IL\s+)?(\d+(?:\.\d+)?)\b", name, re.IGNORECASE)
+    if m3:
+        return float(m3.group(1))
     return None
 
 
