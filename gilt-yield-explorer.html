@@ -670,12 +670,33 @@ function aggregatePortfolioCashflows(terms){
   const bySecurity = []; // [{isin, name, byYear: Map(year->amount)}]
   const yearsSet = new Set();
   let anyUnsupported = false;
+  const diagnostics = []; // [{isin, name, reason}] for holdings with 0 cashflows
 
   state.portfolio.forEach(({isin, units})=>{
     const sec = state.data.securities.find(s=>s.isin===isin);
-    if(!sec || !units) return;
+    if(!sec){ diagnostics.push({isin, name:isin, reason:'security not found in dataset'}); return; }
+    if(!units){ return; } // 0 units entered -- not worth flagging as a problem
+    if(!sec.redemption_date){
+      diagnostics.push({isin, name:sec.name, reason:'no redemption_date in the data file -- rerun fetch_gilt_data.py to pick this up'});
+      return;
+    }
+    if(sec.coupon_pct==null){
+      diagnostics.push({isin, name:sec.name, reason:`coupon rate couldn't be parsed from the name "${sec.name}" (expected e.g. floaters/irregular names)`});
+      return;
+    }
+    if(sec.redemption_date < today){
+      diagnostics.push({isin, name:sec.name, reason:`already matured (redemption date ${sec.redemption_date} is in the past)`});
+      return;
+    }
     const flows = generateCashflows(sec, units, today, rpiMap, lastKnown, beiPoints);
-    if(sec.type==='index_linked' && !flows.length) anyUnsupported = true;
+    if(!flows.length){
+      const reason = sec.type==='index_linked'
+        ? (sec.first_price_date ? 'index ratio could not be computed (check RPI history is loaded)' : 'no first_price_date to infer indexation lag/base -- rerun fetch_gilt_data.py')
+        : 'no coupon dates generated -- unexpected, please report this one';
+      diagnostics.push({isin, name:sec.name, reason});
+      if(sec.type==='index_linked') anyUnsupported = true;
+      return;
+    }
     const byYear = new Map();
     flows.forEach(f=>{
       const yr = f.date.slice(0,4);
@@ -694,7 +715,7 @@ function aggregatePortfolioCashflows(terms){
   });
 
   const years = [...yearsSet].sort();
-  return { years, bySecurity, anyUnsupported };
+  return { years, bySecurity, anyUnsupported, diagnostics };
 }
 
 // ---- shared chart helpers -------------------------------------------------
@@ -1414,9 +1435,16 @@ function renderPortfolioChart(){
   const agg = aggregatePortfolioCashflows(terms);
 
   if(!agg.years.length){
-    svg.innerHTML = emptyState(W,H, state.portfolio.some(r=>r.isin && r.units)
-      ? 'No projectable cashflows for the current portfolio (missing redemption date, coupon, or RPI data for the holdings selected).'
-      : 'Add a gilt and enter units above to see projected cashflows.');
+    let msg;
+    if(!state.portfolio.some(r=>r.isin && r.units)){
+      msg = 'Add a gilt and enter units above to see projected cashflows.';
+    } else if(agg.diagnostics.length){
+      msg = 'No projectable cashflows for the current portfolio:<br>' +
+        agg.diagnostics.map(d=>`&bull; ${d.name}: ${d.reason}`).join('<br>');
+    } else {
+      msg = 'No projectable cashflows for the current portfolio.';
+    }
+    svg.innerHTML = emptyState(W,H, msg);
     legend.innerHTML=''; return;
   }
 
@@ -1473,9 +1501,9 @@ function renderPortfolioChart(){
 
   legend.innerHTML = agg.bySecurity.map((sec,si)=>
     `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[si%COLORS.length]}"></span>${sec.name}</span>`
-  ).join('') + (agg.anyUnsupported
-    ? `<span class="legend-item" style="color:var(--cutover)">Some index-linked holdings couldn't be projected (missing RPI/curve data)</span>`
-    : '') + `<span class="legend-item">Showing ${terms==='real' ? "real (today's money)" : 'nominal (actual £ received)'} terms</span>`;
+  ).join('') + agg.diagnostics.map(d=>
+    `<span class="legend-item" style="color:var(--cutover)">${d.name}: ${d.reason}</span>`
+  ).join('') + `<span class="legend-item">Showing ${terms==='real' ? "real (today's money)" : 'nominal (actual £ received)'} terms</span>`;
 }
 
 loadData();
