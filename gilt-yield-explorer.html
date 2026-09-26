@@ -309,6 +309,8 @@
       <div id="portfolio-editor" style="display:none;">
         <div id="portfolio-rows"></div>
         <button class="btn btn-small" id="addPortfolioRowBtn" style="margin-top:6px;">+ Add gilt</button>
+        <button class="btn btn-small" id="sortPortfolioBtn" style="margin-top:6px;">Sort by maturity</button>
+        <div id="portfolio-summary" class="portfolio-note" style="font-weight:600;"></div>
         <div class="portfolio-note">Amounts are £ nominal held. Index-linked cashflows use DMO's published
           Reference Index formula against known RPI history, then the BoE implied-inflation (BEI) curve to
           project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.</div>
@@ -856,10 +858,37 @@ function securityOptionsHtml(selectedIsin){
   ).join('');
 }
 
+function computePortfolioSummary(){
+  let totalNominal = 0, totalValue = 0, missingPriceCount = 0;
+  state.portfolio.forEach(({isin, units})=>{
+    if(!units) return;
+    totalNominal += units;
+    const sec = state.data.securities.find(s=>s.isin===isin);
+    if(!sec) return;
+    let latestPrice = null;
+    for(let i=sec.series.length-1; i>=0; i--){
+      if(sec.series[i].dirty_price!=null){ latestPrice = sec.series[i].dirty_price; break; }
+    }
+    if(latestPrice!=null) totalValue += (units/100) * latestPrice;
+    else missingPriceCount++;
+  });
+  return {totalNominal, totalValue, missingPriceCount};
+}
+
+function renderPortfolioSummary(){
+  const s = computePortfolioSummary();
+  const fmt = v => '£'+v.toLocaleString(undefined,{maximumFractionDigits:0});
+  document.getElementById('portfolio-summary').innerHTML =
+    `Total nominal: ${fmt(s.totalNominal)} &nbsp;|&nbsp; Portfolio value (latest price): ${fmt(s.totalValue)}` +
+    (s.missingPriceCount ? ` <span style="font-weight:400;color:var(--ink-soft);">`+
+      `(${s.missingPriceCount} holding(s) missing a price, excluded from value)</span>` : '');
+}
+
 function renderPortfolioEditor(){
   const wrap = document.getElementById('portfolio-rows');
   if(!state.portfolio.length){
     wrap.innerHTML = '<div class="portfolio-empty">No gilts added yet -- click "+ Add gilt" below.</div>';
+    renderPortfolioSummary();
     return;
   }
   wrap.innerHTML = state.portfolio.map((row,i)=>`
@@ -874,10 +903,12 @@ function renderPortfolioEditor(){
     const idx = +rowEl.dataset.idx;
     rowEl.querySelector('.row-security').addEventListener('change', e=>{
       state.portfolio[idx].isin = e.target.value;
+      renderPortfolioSummary();
       render();
     });
     rowEl.querySelector('.row-units').addEventListener('input', e=>{
       state.portfolio[idx].units = +e.target.value || 0;
+      renderPortfolioSummary();
       render();
     });
     rowEl.querySelector('.row-remove').addEventListener('click', ()=>{
@@ -886,6 +917,7 @@ function renderPortfolioEditor(){
       render();
     });
   });
+  renderPortfolioSummary();
 }
 
 document.getElementById('addPortfolioRowBtn').addEventListener('click', ()=>{
@@ -893,6 +925,16 @@ document.getElementById('addPortfolioRowBtn').addEventListener('click', ()=>{
   state.portfolio.push({ isin: first ? first.isin : '', units: 0 });
   renderPortfolioEditor();
   render();
+});
+document.getElementById('sortPortfolioBtn').addEventListener('click', ()=>{
+  state.portfolio.sort((a,b)=>{
+    const secA = state.data.securities.find(s=>s.isin===a.isin);
+    const secB = state.data.securities.find(s=>s.isin===b.isin);
+    const dA = (secA && secA.redemption_date) || '9999-99-99';
+    const dB = (secB && secB.redemption_date) || '9999-99-99';
+    return dA<dB ? -1 : dA>dB ? 1 : 0;
+  });
+  renderPortfolioEditor();
 });
 document.getElementById('cashflowTerms').addEventListener('change', render);
 
@@ -1534,11 +1576,9 @@ function renderPortfolioChart(){
 
   legend.innerHTML = `<span class="legend-item" style="font-weight:600;">Total across `+
     `${years[0]}\u2013${years[years.length-1]}: £${grandTotal.toLocaleString(undefined,{maximumFractionDigits:0})}</span>` +
-    agg.bySecurity.map((sec,si)=>
-    `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[si%COLORS.length]}"></span>${sec.name}</span>`
-  ).join('') + agg.diagnostics.map(d=>
+    agg.diagnostics.map(d=>
     `<span class="legend-item" style="color:var(--cutover)">${d.name}: ${d.reason}</span>`
-  ).join('') + `<span class="legend-item">Showing ${terms==='real' ? "real (today's money)" : 'nominal (actual £ received)'} terms</span>`;
+  ).join('') + `<span class="legend-item">Showing ${terms==='real' ? "real (today's money)" : 'nominal (actual £ received)'} terms — hover a bar for the breakdown</span>`;
 }
 
 loadData();
