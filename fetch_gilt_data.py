@@ -129,6 +129,9 @@ BOE_LATEST_ZIP_URL = ("https://www.bankofengland.co.uk/-/media/boe/files/"
 
 DMO_RAW_DIR = "./dmo_raw"  # put manually-downloaded DMO yearly files here
 RPI_RAW_DIR = "./rpi_raw"  # put a manually-downloaded DMO RPI Data export here
+IL_GILTS_RAW_DIR = "./il_gilts_raw"  # put a manually-downloaded DMO "Index-linked
+                                     # Gilts in Issue" export here (see
+                                     # fetch_il_index_ratio_anchors docstring)
 
 CUTOVER_DATE = "2017-07-21"  # last DMO reference price date
 
@@ -832,6 +835,137 @@ def _rows_from_rpi_dataframe(df):
 
 
 # ---------------------------------------------------------------------------
+# Index-linked gilt index-ratio anchors (from DMO's "Index-linked Gilts in
+# Issue" report) -- fixes systematic error in deriving the index ratio
+# purely from first_price_date (see fetch_il_index_ratio_anchors below).
+# ---------------------------------------------------------------------------
+
+def discover_il_gilts_raw_files():
+    if not os.path.isdir(IL_GILTS_RAW_DIR):
+        return []
+    return sorted(
+        os.path.join(IL_GILTS_RAW_DIR, fn) for fn in os.listdir(IL_GILTS_RAW_DIR)
+        if fn.lower().endswith((".xls", ".xlsx", ".csv")))
+
+
+def parse_il_gilts_raw_file(path):
+    """Parse one manually-downloaded copy of DMO's "Index-linked Gilts in
+    Issue" report ("Download"-style sheet: Gilt Name / ISIN Code / "Index
+    Ratio for settlement on <date>" / ..., with rows grouped under
+    "3-month Indexation Lag" and "8-month Indexation Lag" section labels).
+
+    Returns {"settlement_date": "YYYY-MM-DD", "ratios": {isin: ratio},
+    "lag_months": {isin: 3|8}}, or None if the file doesn't look like
+    this report (e.g. wrong sheet, or DMO changed its layout).
+    """
+    try:
+        sheets = pd.read_excel(path, sheet_name=None, header=None)
+    except Exception:
+        try:
+            sheets = {"": pd.read_csv(path, header=None)}
+        except Exception as e:
+            print(f"  could not read {path}: {e}")
+            return None
+
+    for sheet_name, df in sheets.items():
+        header_row_idx = None
+        settlement_date = None
+        isin_col = ratio_col = None
+        for i in range(min(20, len(df))):
+            row_vals = [str(v) for v in df.iloc[i].tolist()]
+            if (any("isin" in v.lower() for v in row_vals)
+                    and any("index ratio" in v.lower() for v in row_vals)):
+                header_row_idx = i
+                for col_idx, v in enumerate(row_vals):
+                    vl = v.lower()
+                    if "isin" in vl:
+                        isin_col = col_idx
+                    m = re.search(r"index ratio for settlement on\s+"
+                                  r"([\w\-]+)", v, re.IGNORECASE)
+                    if m:
+                        ratio_col = col_idx
+                        settlement_date = pd.to_datetime(m.group(1), errors="coerce")
+                break
+        if header_row_idx is None or isin_col is None or ratio_col is None:
+            continue  # not this sheet -- try the next one (e.g. "Download" vs others)
+        if settlement_date is None or pd.isna(settlement_date):
+            print(f"  WARNING: found the header row in {path} ({sheet_name}) "
+                  f"but couldn't parse the settlement date from it -- "
+                  f"can't use these ratios without an anchor date.")
+            continue
+
+        ratios, lag_months = {}, {}
+        current_lag = None
+        for i in range(header_row_idx + 1, len(df)):
+            first_cell = df.iat[i, 0]
+            if isinstance(first_cell, str) and "indexation lag" in first_cell.lower():
+                current_lag = 8 if "8-month" in first_cell else (
+                    3 if "3-month" in first_cell else current_lag)
+                continue
+            isin = df.iat[i, isin_col]
+            ratio = df.iat[i, ratio_col]
+            if pd.isna(isin) or pd.isna(ratio):
+                continue
+            isin = str(isin).strip()
+            if not re.match(r"^GB00[0-9A-Z]{7}\d$", isin):
+                continue
+            try:
+                ratios[isin] = float(ratio)
+            except (TypeError, ValueError):
+                continue
+            if current_lag:
+                lag_months[isin] = current_lag
+
+        if ratios:
+            print(f"  parsed {len(ratios)} index ratios from {path} "
+                  f"({sheet_name}), anchored to settlement date "
+                  f"{settlement_date.strftime('%Y-%m-%d')}")
+            return {"settlement_date": settlement_date.strftime("%Y-%m-%d"),
+                    "ratios": ratios, "lag_months": lag_months}
+
+    print(f"  WARNING: {path} didn't match the expected 'Index-linked "
+          f"Gilts in Issue' layout (Gilt Name / ISIN Code / Index Ratio "
+          f"columns with 3-month/8-month section labels) in any sheet.")
+    return None
+
+
+def fetch_il_index_ratio_anchors():
+    """Get real, DMO-published index ratios (and lag type) per currently-
+    issued index-linked gilt, to anchor the app's own Reference Index
+    formula to rather than deriving everything from first_price_date --
+    that proxy turned out to be materially wrong for gilts whose earliest
+    available price data doesn't reach back to their actual issue date
+    (confirmed: error scaled almost exactly with each gilt's true
+    accumulated inflation uplift, from a user cross-check against this
+    report).
+
+    DMO's own reference list ("gilts in issue") is normally a PDF and
+    isn't scraped automatically here -- like RPI history, this expects a
+    manually-downloaded copy (exportable as Excel from a real browser
+    session) in IL_GILTS_RAW_DIR:
+
+        1. Visit https://www.dmo.gov.uk/data/gilt-market/index-linked-gilts
+        2. Open/export the "Index-linked gilts in issue" report as Excel.
+        3. Save it into ./il_gilts_raw/ next to this script.
+
+    Returns {"settlement_date": ..., "ratios": {isin: ratio},
+    "lag_months": {isin: 3|8}}, or an empty dict if no usable file was
+    found (in which case the app falls back to the first_price_date
+    proxy method for any gilt without an anchor).
+    """
+    files = discover_il_gilts_raw_files()
+    if not files:
+        print(f"  no files found in {IL_GILTS_RAW_DIR} -- see "
+              f"fetch_il_index_ratio_anchors docstring for how to get "
+              f"DMO's 'Index-linked Gilts in Issue' report.")
+        return {}
+    parsed = [r for r in (parse_il_gilts_raw_file(p) for p in files) if r]
+    if not parsed:
+        return {}
+    return max(parsed, key=lambda r: r["settlement_date"])
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -841,13 +975,14 @@ def main():
     parser.add_argument(
         "--only", default="all",
         help=("Comma-separated components to run: dmo, boe-archive, "
-              "boe-latest, rpi, or 'all' (default). Skipped components "
-              "reuse their data from the existing gilt_yields.json if "
-              "present. E.g. --only boe-latest for a fast daily refresh; "
-              "--only dmo,boe-archive to skip the daily-only piece."))
+              "boe-latest, rpi, il-ratios, or 'all' (default). Skipped "
+              "components reuse their data from the existing "
+              "gilt_yields.json if present. E.g. --only boe-latest for a "
+              "fast daily refresh; --only dmo,boe-archive to skip the "
+              "daily-only piece."))
     args = parser.parse_args()
 
-    valid = {"dmo", "boe-archive", "boe-latest", "rpi"}
+    valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios"}
     components = valid if args.only == "all" else set(args.only.split(","))
     unknown = components - valid
     if unknown:
@@ -910,6 +1045,21 @@ def main():
         print(f"\n=== Skipping RPI history (--only) -- reusing "
               f"{len(rpi_history)} months from existing gilt_yields.json ===")
 
+    # --- IL gilt index-ratio anchors (fixes the first_price_date proxy) ---
+    if "il-ratios" in components:
+        print("\n=== Fetching DMO index-linked gilt index-ratio anchors ===")
+        il_index_ratio_anchors = fetch_il_index_ratio_anchors()
+        if not il_index_ratio_anchors and previous and previous.get("il_index_ratio_anchors"):
+            il_index_ratio_anchors = previous["il_index_ratio_anchors"]
+            print(f"  fetch returned nothing (no file in {IL_GILTS_RAW_DIR} "
+                  f"on this machine) -- keeping the anchors already in "
+                  f"gilt_yields.json rather than overwriting them with an "
+                  f"empty result.")
+    else:
+        il_index_ratio_anchors = (previous or {}).get("il_index_ratio_anchors", {})
+        print(f"\n=== Skipping IL index-ratio anchors (--only) -- reusing "
+              f"existing gilt_yields.json data ===")
+
     output = {
         "generated": datetime.utcnow().isoformat() + "Z",
         "cutover_date": CUTOVER_DATE,
@@ -947,6 +1097,7 @@ def main():
         "securities": securities,
         "curves": curves,
         "rpi_history": rpi_history,
+        "il_index_ratio_anchors": il_index_ratio_anchors,
     }
 
     with open("gilt_yields.json", "w") as f:
@@ -957,7 +1108,8 @@ def main():
         f"{len(curves.get(c, {}).get('forward', []))}fwd"
         for c in BOE_CURVE_TYPES)
     print(f"\nWrote gilt_yields.json: {len(securities)} securities, "
-          f"curves: {curve_summary}, rpi_history: {len(rpi_history)} months.")
+          f"curves: {curve_summary}, rpi_history: {len(rpi_history)} months, "
+          f"il_index_ratio_anchors: {len(il_index_ratio_anchors.get('ratios', {}))} ISINs.")
 
 
 if __name__ == "__main__":

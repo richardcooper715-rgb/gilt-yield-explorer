@@ -309,7 +309,7 @@
       <div id="portfolio-editor" style="display:none;">
         <div id="portfolio-rows"></div>
         <button class="btn btn-small" id="addPortfolioRowBtn" style="margin-top:6px;">+ Add gilt</button>
-        <div class="portfolio-note">Units are £100 nominal each. Index-linked cashflows use DMO's published
+        <div class="portfolio-note">Amounts are £ nominal held. Index-linked cashflows use DMO's published
           Reference Index formula against known RPI history, then the BoE implied-inflation (BEI) curve to
           project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.</div>
       </div>
@@ -371,7 +371,8 @@ const SAMPLE_DATA = {
     inflation: { spot: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 2.7, 0.20, 0),
                  forward: genCurve("2017-07-24","2026-09-01",[1,2,3,4,5,7,10,15,20,25,30,40], 2.7, 0.20, 0.15) }
   },
-  rpi_history: genRpiHistory("1987-01","2026-07", 100, 3.2)
+  rpi_history: genRpiHistory("1987-01","2026-07", 100, 3.2),
+  il_index_ratio_anchors: {}
 };
 
 function genSeries(start,end,base,drift,noise){
@@ -433,7 +434,7 @@ async function loadData(){
   initDateInputs();
   // pre-select first two securities
   state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
-  if(state.data.securities.length) state.portfolio = [{isin: state.data.securities[0].isin, units: 100}];
+  if(state.data.securities.length) state.portfolio = [{isin: state.data.securities[0].isin, units: 100000}];
   renderPortfolioEditor();
   render();
 }
@@ -606,12 +607,38 @@ function referenceIndex(dateStr, lagMonths, rpiMap, lastKnown, beiPoints){
 }
 
 function lagMonthsFor(sec){
+  const anchors = state.data.il_index_ratio_anchors;
+  if(anchors && anchors.lag_months && anchors.lag_months[sec.isin]){
+    return anchors.lag_months[sec.isin];
+  }
   return (sec.first_price_date && sec.first_price_date >= RPI_LAG_CUTOVER_DATE) ? 3 : 8;
 }
 
 function indexRatioForDate(sec, dateStr, rpiMap, lastKnown, beiPoints){
-  if(!sec.first_price_date) return null;
   const lag = lagMonthsFor(sec);
+  const anchors = state.data.il_index_ratio_anchors;
+  const anchorRatio = anchors && anchors.ratios ? anchors.ratios[sec.isin] : null;
+
+  // Preferred path: anchor to DMO's own published index ratio (real,
+  // settlement-grade figure) and use our own Reference Index formula
+  // only for the short, reliable move from that anchor date to the
+  // target date -- NOT to derive the base itself. Deriving the base
+  // from first_price_date turned out to be materially wrong for gilts
+  // whose earliest available price data doesn't reach back to their
+  // true issue date (confirmed via a user cross-check against DMO's
+  // own report -- error scaled almost exactly with each gilt's true
+  // accumulated inflation uplift).
+  if(anchorRatio!=null && anchors.settlement_date){
+    const refAtAnchor = referenceIndex(anchors.settlement_date, lag, rpiMap, lastKnown, beiPoints);
+    const refAtDate = referenceIndex(dateStr, lag, rpiMap, lastKnown, beiPoints);
+    if(refAtAnchor==null || refAtDate==null || refAtAnchor===0) return null;
+    return anchorRatio * (refAtDate/refAtAnchor);
+  }
+
+  // Fallback: no DMO anchor for this ISIN (e.g. rerun fetch_gilt_data.py
+  // with a file in il_gilts_raw/, or it's not currently "in issue") --
+  // derive from first_price_date as before, less reliable.
+  if(!sec.first_price_date) return null;
   const base = referenceIndex(sec.first_price_date, lag, rpiMap, lastKnown, beiPoints);
   const cur = referenceIndex(dateStr, lag, rpiMap, lastKnown, beiPoints);
   if(base==null || cur==null || base===0) return null;
@@ -643,7 +670,7 @@ function couponDatesFrom(redemptionDate, fromDate){
 // applied afterwards, at aggregation time.
 function generateCashflows(sec, units, fromDate, rpiMap, lastKnown, beiPoints){
   if(!sec.redemption_date || sec.coupon_pct==null || !units) return [];
-  const nominal = units*100;
+  const nominal = units;
   const dates = couponDatesFrom(sec.redemption_date, fromDate);
   if(!dates.length) return [];
   const isIL = sec.type==='index_linked';
@@ -838,7 +865,7 @@ function renderPortfolioEditor(){
   wrap.innerHTML = state.portfolio.map((row,i)=>`
     <div class="portfolio-row" data-idx="${i}">
       <select class="row-security">${securityOptionsHtml(row.isin)}</select>
-      <span class="row-label">units (£100 each):</span>
+      <span class="row-label">£ nominal:</span>
       <input type="number" class="row-units" min="0" step="1" value="${row.units||''}">
       <button class="btn btn-small row-remove" type="button">Remove</button>
     </div>`).join('');
@@ -1458,9 +1485,12 @@ function renderPortfolioChart(){
 
   let svgParts = [];
   drawYAxis(svgParts, M, W, 0, yMax, plotH, v=>'£'+Math.round(v).toLocaleString());
+  const showAllLabels = years.length<=20;
   years.forEach((yr,i)=>{
     const xx = xIdx(i)+bandW/2;
-    svgParts.push(`<text class="axis" x="${xx}" y="${H-14}" text-anchor="middle">${yr}</text>`);
+    if(showAllLabels || (+yr % 5 === 0)){
+      svgParts.push(`<text class="axis" x="${xx}" y="${H-14}" text-anchor="middle">${yr}</text>`);
+    }
   });
 
   const barW = Math.max(4, bandW*0.6);
@@ -1499,7 +1529,12 @@ function renderPortfolioChart(){
     el.addEventListener('touchstart', evt=>{ if(evt.touches[0]) showFor(evt.touches[0].clientX, evt.touches[0].clientY); }, {passive:true});
   });
 
-  legend.innerHTML = agg.bySecurity.map((sec,si)=>
+  const grandTotal = years.reduce((s,yr)=>
+    s+agg.bySecurity.reduce((s2,sec)=>s2+(sec.byYear.get(yr)||0),0), 0);
+
+  legend.innerHTML = `<span class="legend-item" style="font-weight:600;">Total across `+
+    `${years[0]}\u2013${years[years.length-1]}: £${grandTotal.toLocaleString(undefined,{maximumFractionDigits:0})}</span>` +
+    agg.bySecurity.map((sec,si)=>
     `<span class="legend-item"><span class="legend-swatch" style="background:${COLORS[si%COLORS.length]}"></span>${sec.name}</span>`
   ).join('') + agg.diagnostics.map(d=>
     `<span class="legend-item" style="color:var(--cutover)">${d.name}: ${d.reason}</span>`
