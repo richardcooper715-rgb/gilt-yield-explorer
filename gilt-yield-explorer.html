@@ -314,8 +314,20 @@
       <div class="controls" id="controls-portfolio" style="display:none;">
         <label class="toggle">Portfolio name: <input type="text" id="portfolioName" placeholder="my_portfolio"></label>
         <button class="btn" id="savePortfolioBtn">Save portfolio</button>
-        <button class="btn" id="loadPortfolioBtn">Load portfolio</button>
+        <button class="btn" id="loadPortfolioBtn">Load portfolio (file)</button>
+        <button class="btn" id="pastePortfolioBtn">Load portfolio (paste JSON)</button>
         <input type="file" id="loadPortfolioFile" accept="application/json,.json" style="display:none;">
+      </div>
+      <div id="paste-portfolio-panel" style="display:none; margin-bottom:14px;">
+        <textarea id="pastePortfolioText" rows="6" placeholder="Paste the contents of a *_portfolio.json file here"
+          style="width:100%; box-sizing:border-box; font-family:inherit; font-size:12px; padding:8px;
+          border:1px solid var(--line); border-radius:6px; background:var(--paper-panel); color:var(--ink);"></textarea>
+        <div style="margin-top:6px; display:flex; gap:8px;">
+          <button class="btn btn-small" id="applyPastedPortfolioBtn">Load</button>
+          <button class="btn btn-small" id="cancelPastedPortfolioBtn">Cancel</button>
+        </div>
+        <div class="portfolio-note">On an iPad where the file picker for "Load portfolio (file)" doesn't open: open your
+          saved *_portfolio.json in Files/another app, copy its text, and paste it above instead.</div>
       </div>
 
       <div class="controls" id="controls-portfolio-cashflows" style="display:none;">
@@ -377,7 +389,7 @@ function drawMaturityValueLabels(svgParts, pts, x, y, color, fmt, valueKey){
   pts.forEach(p=>{
     if(!LABEL_MATURITIES.includes(p.maturity_years)) return;
     svgParts.push(`<text class="axis" x="${x(p.maturity_years)}" y="${y(p[valueKey])-8}" `+
-      `text-anchor="middle" fill="${color}" font-size="10">${fmt(p[valueKey])}</text>`);
+      `text-anchor="middle" fill="${color}" font-size="12.5">${fmt(p[valueKey])}</text>`);
   });
 }
 
@@ -1017,6 +1029,27 @@ document.getElementById('savePortfolioBtn').addEventListener('click', ()=>{
   URL.revokeObjectURL(url);
 });
 
+function applyLoadedPortfolioJson(text){
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch(err){
+    alert("Could not read that -- is it the contents of a portfolio JSON saved from this app?");
+    return false;
+  }
+  const holdings = Array.isArray(parsed.holdings) ? parsed.holdings : [];
+  const known = new Set(state.data.securities.map(s=>s.isin));
+  const missing = holdings.filter(h=>!known.has(h.isin));
+  state.portfolio = holdings.filter(h=>known.has(h.isin)).map(h=>({isin:h.isin, units:+h.units||0}));
+  if(parsed.name) document.getElementById('portfolioName').value = parsed.name;
+  renderPortfolioEditor();
+  render();
+  if(missing.length){
+    alert(`Loaded, but ${missing.length} holding(s) reference ISINs not in the `+
+          `current dataset and were skipped: ${missing.map(m=>m.isin).join(', ')}`);
+  }
+  return true;
+}
+
 document.getElementById('loadPortfolioBtn').addEventListener('click', ()=>{
   document.getElementById('loadPortfolioFile').click();
 });
@@ -1024,22 +1057,7 @@ document.getElementById('loadPortfolioFile').addEventListener('change', (e)=>{
   const file = e.target.files[0];
   if(!file) return;
   const reader = new FileReader();
-  reader.onload = () => {
-    let parsed;
-    try { parsed = JSON.parse(reader.result); }
-    catch(err){ alert('Could not read that file -- is it a portfolio JSON saved from this app?'); return; }
-    const holdings = Array.isArray(parsed.holdings) ? parsed.holdings : [];
-    const known = new Set(state.data.securities.map(s=>s.isin));
-    const missing = holdings.filter(h=>!known.has(h.isin));
-    state.portfolio = holdings.filter(h=>known.has(h.isin)).map(h=>({isin:h.isin, units:+h.units||0}));
-    if(parsed.name) document.getElementById('portfolioName').value = parsed.name;
-    renderPortfolioEditor();
-    render();
-    if(missing.length){
-      alert(`Loaded, but ${missing.length} holding(s) reference ISINs not in the `+
-            `current dataset and were skipped: ${missing.map(m=>m.isin).join(', ')}`);
-    }
-  };
+  reader.onload = () => { applyLoadedPortfolioJson(reader.result); };
   reader.readAsText(file);
   e.target.value = ''; // allow reloading the same filename later
 });
@@ -1475,7 +1493,7 @@ function renderCurveChange(){
       parts2.push(`<text class="axis" x="${xx}" y="${H2-6}" text-anchor="middle">${d.maturity}y</text>`);
       if(LABEL_MATURITIES.includes(d.maturity)){
         const labelY = d.bps>=0 ? Math.min(yy0,yy1)-4 : Math.max(yy0,yy1)+12;
-        parts2.push(`<text class="axis" x="${xx}" y="${labelY}" text-anchor="middle" font-size="10">`+
+        parts2.push(`<text class="axis" x="${xx}" y="${labelY}" text-anchor="middle" font-size="12.5">`+
           `${d.bps>=0?'+':''}${d.bps.toFixed(0)}bp</text>`);
       }
     });
