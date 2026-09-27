@@ -199,6 +199,9 @@
   <div class="layout">
     <aside>
       <input class="search" id="search" placeholder="Search by name or ISIN…" />
+      <div style="display:flex; gap:6px; margin:6px 0 2px;">
+        <button class="btn btn-small" id="sortSecListBtn" style="flex:1;">Sort by maturity</button>
+      </div>
       <div id="sec-list"></div>
     </aside>
 
@@ -208,7 +211,8 @@
         <button class="view-tab" data-view="snapshot">Curve Snapshot</button>
         <button class="view-tab" data-view="change">Curve Change</button>
         <button class="view-tab" data-view="steepness">Curve Steepness</button>
-        <button class="view-tab" data-view="portfolio">Portfolio Cashflows</button>
+        <button class="view-tab" data-view="portfolio">Portfolio</button>
+        <button class="view-tab" data-view="portfolio-cashflows">Portfolio Cashflows</button>
       </div>
 
       <div class="controls" id="controls-timeseries">
@@ -229,6 +233,13 @@
             <option value="36">36 months</option>
             <option value="60">60 months</option>
             <option value="all" selected>Since inception</option>
+          </select>
+        </label>
+        <label class="toggle">
+          Colour by:
+          <select id="colorMode">
+            <option value="security">Security (full granularity)</option>
+            <option value="type">Type (conventional / linker)</option>
           </select>
         </label>
         <label class="toggle"><input type="checkbox" id="showNominalCurve"> Overlay BoE nominal curve</label>
@@ -287,6 +298,18 @@
           <option value="spot">Spot (zero coupon)</option>
           <option value="forward">Forward</option>
         </select></label>
+        <label class="toggle">
+          Period:
+          <select id="steepnessPeriodSelect">
+            <option value="1">1 month</option>
+            <option value="3">3 months</option>
+            <option value="6">6 months</option>
+            <option value="12">12 months</option>
+            <option value="36">36 months</option>
+            <option value="60">60 months</option>
+            <option value="all" selected>Since inception</option>
+          </select>
+        </label>
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="2,10" checked> 2s10s</label>
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,20" checked> 10s20s</label>
         <label class="toggle"><input type="checkbox" class="spread-toggle" value="10,30" checked> 10s30s</label>
@@ -300,6 +323,9 @@
         <button class="btn" id="savePortfolioBtn">Save portfolio</button>
         <button class="btn" id="loadPortfolioBtn">Load portfolio</button>
         <input type="file" id="loadPortfolioFile" accept="application/json,.json" style="display:none;">
+      </div>
+
+      <div class="controls" id="controls-portfolio-cashflows" style="display:none;">
         <label class="toggle">Show: <select id="cashflowTerms">
           <option value="nominal">Nominal (£ actually received)</option>
           <option value="real">Real (today's money)</option>
@@ -313,10 +339,11 @@
         <div id="portfolio-summary" class="portfolio-note" style="font-weight:600;"></div>
         <div class="portfolio-note">Amounts are £ nominal held. Index-linked cashflows use DMO's published
           Reference Index formula against known RPI history, then the BoE implied-inflation (BEI) curve to
-          project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.</div>
+          project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.
+          Switch to the Portfolio Cashflows tab to see the projected chart.</div>
       </div>
 
-      <div class="chart-wrap">
+      <div class="chart-wrap" id="chart-wrap">
         <svg id="chart" viewBox="0 0 900 420" preserveAspectRatio="xMidYMid meet"></svg>
         <svg id="chart2" viewBox="0 0 900 160" preserveAspectRatio="xMidYMid meet" style="display:none; margin-top:8px;"></svg>
         <div class="legend" id="legend"></div>
@@ -337,6 +364,22 @@ const COLORS = ["#2A5C8A","#A8763E","#5B7B4C","#7A4E8C","#B04A3C","#3E8B8B","#8C
 // smoother/more accurate forward curve in particular), but we deliberately
 // don't clutter the axis or the dropdown with all 40 of those points.
 const AXIS_MATURITIES = [1,2,3,4,5,7,10,15,20,25,30,40];
+
+// Every-5-years subset used for on-chart value labels (as opposed to
+// AXIS_MATURITIES, which is the full set of axis tick positions).
+const LABEL_MATURITIES = [5,10,15,20,25,30,35,40];
+
+// Draw a text value label above each point in `pts` whose maturity is in
+// LABEL_MATURITIES. `pts` is [{maturity_years, rate_pct}], `valueKey`
+// names the field to read/format (default rate_pct).
+function drawMaturityValueLabels(svgParts, pts, x, y, color, fmt, valueKey){
+  valueKey = valueKey || 'rate_pct';
+  pts.forEach(p=>{
+    if(!LABEL_MATURITIES.includes(p.maturity_years)) return;
+    svgParts.push(`<text class="axis" x="${x(p.maturity_years)}" y="${y(p[valueKey])-8}" `+
+      `text-anchor="middle" fill="${color}" font-size="10">${fmt(p[valueKey])}</text>`);
+  });
+}
 
 // Small embedded sample so this artifact renders something useful even
 // without gilt_yields.json present. Replace by running fetch_gilt_data.py
@@ -415,7 +458,7 @@ function genRpiHistory(startMonth,endMonth,base,annualGrowthPct){
   return out;
 }
 
-const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield', portfolio:[] };
+const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield', portfolio:[], secListSortByMaturity:false };
 
 async function loadData(){
   try{
@@ -445,6 +488,16 @@ function buildSecurityList(){
   const list = document.getElementById('sec-list');
   const groups = { conventional: [], index_linked: [] };
   state.data.securities.forEach(s=> (groups[s.type]||groups.conventional).push(s));
+
+  if(state.secListSortByMaturity){
+    const byMaturity = (a,b)=>{
+      const dA = a.redemption_date || '9999-99-99';
+      const dB = b.redemption_date || '9999-99-99';
+      return dA<dB ? -1 : dA>dB ? 1 : 0;
+    };
+    groups.conventional.sort(byMaturity);
+    groups.index_linked.sort(byMaturity);
+  }
 
   function renderGroup(label, arr){
     if(!arr.length) return '';
@@ -496,7 +549,8 @@ function initDateInputs(){
   const b = document.getElementById('changeDateB');
   [snap,a,b].forEach(el=>{ el.min = range.min; el.max = range.max; });
   snap.value = range.max;
-  a.value = range.min;
+  const preferredFromA = "2026-01-01";
+  a.value = (preferredFromA>=range.min && preferredFromA<=range.max) ? preferredFromA : range.min;
   b.value = range.max;
 }
 
@@ -803,10 +857,11 @@ document.querySelectorAll('.view-tab').forEach(btn=>{
     document.querySelectorAll('.view-tab').forEach(b=>b.classList.remove('active'));
     btn.classList.add('active');
     state.view = btn.dataset.view;
-    ['timeseries','snapshot','change','steepness','portfolio'].forEach(v=>{
+    ['timeseries','snapshot','change','steepness','portfolio','portfolio-cashflows'].forEach(v=>{
       document.getElementById('controls-'+v).style.display = (v===state.view) ? 'flex' : 'none';
     });
     document.getElementById('portfolio-editor').style.display = (state.view==='portfolio') ? 'block' : 'none';
+    document.getElementById('chart-wrap').style.display = (state.view==='portfolio') ? 'none' : 'block';
     render();
   });
 });
@@ -818,8 +873,14 @@ document.getElementById('search').addEventListener('input', (e)=>{
     el.style.display = match ? 'flex' : 'none';
   });
 });
+document.getElementById('sortSecListBtn').addEventListener('click', (e)=>{
+  state.secListSortByMaturity = !state.secListSortByMaturity;
+  e.target.classList.toggle('btn-primary', state.secListSortByMaturity);
+  buildSecurityList();
+});
 document.getElementById('fieldSelect').addEventListener('change', e=>{ state.field = e.target.value; render(); });
 document.getElementById('periodSelect').addEventListener('change', render);
+document.getElementById('colorMode').addEventListener('change', render);
 document.getElementById('showNominalCurve').addEventListener('change', render);
 document.getElementById('showRealCurve').addEventListener('change', render);
 document.getElementById('showInflationCurve').addEventListener('change', render);
@@ -991,11 +1052,11 @@ function render(){
   else if(state.view==='snapshot') renderCurveSnapshot();
   else if(state.view==='change') renderCurveChange();
   else if(state.view==='steepness') renderSteepness();
-  else if(state.view==='portfolio') renderPortfolioChart();
+  else if(state.view==='portfolio-cashflows') renderPortfolioChart();
 }
 
-function periodCutoffMonths(){
-  const val = document.getElementById('periodSelect').value;
+function periodCutoffMonths(elId){
+  const val = document.getElementById(elId || 'periodSelect').value;
   return val==='all' ? null : parseInt(val,10);
 }
 
@@ -1147,6 +1208,10 @@ function renderTimeSeries(){
   const showInfl = document.getElementById('showInflationCurve').checked;
   const overlayMeasure = document.getElementById('overlayMeasure').value;
   const periodMonths = periodCutoffMonths();
+  const colorMode = document.getElementById('colorMode').value;
+  const TYPE_COLORS = { conventional: COLORS[0], index_linked: COLORS[4] };
+  const secColor = s => colorMode==='type' ? TYPE_COLORS[s.type] || COLORS[0]
+                                             : COLORS[state.data.securities.indexOf(s)%COLORS.length];
 
   // Anchor "trailing N months" to the most recent date across whatever
   // could be plotted, so the window always reflects the latest data --
@@ -1175,7 +1240,7 @@ function renderTimeSeries(){
     const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff);
     pts.forEach(p=>allPoints.push({date:p.date, val:p[field]}));
     if(pts.length){
-      const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
+      const color = secColor(s);
       tooltipSeries.push({label:s.name, color, points: pts.map(p=>({t:+new Date(p.date), val:p[field]}))});
     }
   });
@@ -1220,7 +1285,7 @@ function renderTimeSeries(){
   }
 
   selectedSecs.forEach(s=>{
-    const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
+    const color = secColor(s);
     const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff)
       .map(p=>`${x(+new Date(p.date))},${y(p[field])}`).join(' ');
     if(pts) svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
@@ -1241,10 +1306,19 @@ function renderTimeSeries(){
   attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, tooltipSeries,
     v=>field==='yield' ? v.toFixed(3)+'%' : v.toFixed(3));
 
-  let legendHtml = selectedSecs.map(s=>{
-    const color = COLORS[state.data.securities.indexOf(s)%COLORS.length];
-    return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.name}</span>`;
-  }).join('');
+  let legendHtml;
+  if(colorMode==='type'){
+    const typesPresent = new Set(selectedSecs.map(s=>s.type));
+    legendHtml = [...typesPresent].map(t=>
+      `<span class="legend-item"><span class="legend-swatch" style="background:${TYPE_COLORS[t]}"></span>`+
+      `${t==='conventional'?'Conventional':'Index-linked'}</span>`
+    ).join('');
+  } else {
+    legendHtml = selectedSecs.map(s=>{
+      const color = secColor(s);
+      return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.name}</span>`;
+    }).join('');
+  }
   overlayTypes.forEach(([ct,color,label])=>{
     legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${color};border-top:2px dotted ${color}"></span>${label} ${state.maturity}y (${overlayMeasure})</span>`;
   });
@@ -1301,6 +1375,7 @@ function renderCurveSnapshot(){
   pts.forEach(p=>{
     svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${color}"/>`);
   });
+  drawMaturityValueLabels(svgParts, pts, x, y, color, v=>v.toFixed(2)+'%');
   svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
 
   svg.innerHTML = svgParts.join('');
@@ -1365,6 +1440,8 @@ function renderCurveChange(){
   svgParts.push(`<polyline class="series-line" points="${lineB}" stroke="${colorB}"/>`);
   ptsA.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorA}"/>`));
   ptsB.forEach(p=>svgParts.push(`<circle cx="${x(p.maturity_years)}" cy="${y(p.rate_pct)}" r="3" fill="${colorB}"/>`));
+  drawMaturityValueLabels(svgParts, ptsA, x, y, colorA, v=>v.toFixed(2)+'%');
+  drawMaturityValueLabels(svgParts, ptsB, x, y, colorB, v=>v.toFixed(2)+'%');
   svgParts.push(`<rect id="hoverHit" x="${M.left}" y="${M.top}" width="${plotW}" height="${plotH}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
 
   svg.innerHTML = svgParts.join('');
@@ -1407,6 +1484,11 @@ function renderCurveChange(){
       // spanning the full panel height, so hover/tap is easy to land on.
       parts2.push(`<rect data-idx="${i}" x="${xx-Math.max(barW,14)/2}" y="${M2.top}" width="${Math.max(barW,14)}" height="${plotH2}" fill="transparent" style="pointer-events:all;cursor:crosshair;"/>`);
       parts2.push(`<text class="axis" x="${xx}" y="${H2-6}" text-anchor="middle">${d.maturity}y</text>`);
+      if(LABEL_MATURITIES.includes(d.maturity)){
+        const labelY = d.bps>=0 ? Math.min(yy0,yy1)-4 : Math.max(yy0,yy1)+12;
+        parts2.push(`<text class="axis" x="${xx}" y="${labelY}" text-anchor="middle" font-size="10">`+
+          `${d.bps>=0?'+':''}${d.bps.toFixed(0)}bp</text>`);
+      }
     });
     chart2.innerHTML = parts2.join('');
     chart2.querySelectorAll('rect[data-idx]').forEach(el=>{
@@ -1459,6 +1541,18 @@ function renderSteepness(){
     legend.innerHTML=''; return;
   }
 
+  const periodMonths = periodCutoffMonths('steepnessPeriodSelect');
+  if(periodMonths!==null){
+    const latest = Math.max(...series.flatMap(s=>s.pts.map(p=>+new Date(p.date))));
+    const cutoff = monthsAgo(latest, periodMonths);
+    series.forEach(s=>{ s.pts = s.pts.filter(p=>+new Date(p.date)>=cutoff); });
+  }
+  const nonEmptySeries = series.filter(s=>s.pts.length);
+  if(!nonEmptySeries.length){
+    svg.innerHTML = emptyState(W,H,'No data for the selected spreads in this period.');
+    legend.innerHTML=''; return;
+  }
+
   const allDates = series.flatMap(s=>s.pts.map(p=>+new Date(p.date)));
   const allBps = series.flatMap(s=>s.pts.map(p=>p.bps));
   const xMin=Math.min(...allDates), xMax=Math.max(...allDates);
@@ -1471,7 +1565,7 @@ function renderSteepness(){
 
   let svgParts = [];
   drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>v.toFixed(0)+'bp');
-  drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, null);
+  drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, periodMonths);
   if(yLo<0 && yHi>0){
     const yy = y(0);
     svgParts.push(`<line class="gridline" x1="${M.left}" x2="${W-M.right}" y1="${yy}" y2="${yy}" stroke-width="1.4"/>`);
