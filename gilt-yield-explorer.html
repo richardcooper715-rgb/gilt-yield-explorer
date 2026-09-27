@@ -235,13 +235,6 @@
             <option value="all" selected>Since inception</option>
           </select>
         </label>
-        <label class="toggle">
-          Colour by:
-          <select id="colorMode">
-            <option value="security">Security (full granularity)</option>
-            <option value="type">Type (conventional / linker)</option>
-          </select>
-        </label>
         <label class="toggle"><input type="checkbox" id="showNominalCurve"> Overlay BoE nominal curve</label>
         <label class="toggle"><input type="checkbox" id="showRealCurve"> Overlay BoE real curve</label>
         <label class="toggle"><input type="checkbox" id="showInflationCurve"> Overlay BoE inflation (BEI) curve</label>
@@ -330,6 +323,13 @@
           <option value="nominal">Nominal (£ actually received)</option>
           <option value="real">Real (today's money)</option>
         </select></label>
+        <label class="toggle">
+          Colour by:
+          <select id="cashflowColorMode">
+            <option value="security">Security (full granularity)</option>
+            <option value="type">Type (conventional / linker)</option>
+          </select>
+        </label>
       </div>
 
       <div id="portfolio-editor" style="display:none;">
@@ -794,7 +794,7 @@ function aggregatePortfolioCashflows(terms){
       byYear.set(yr, (byYear.get(yr)||0)+amt);
       yearsSet.add(yr);
     });
-    if(byYear.size) bySecurity.push({isin, name:sec.name, byYear});
+    if(byYear.size) bySecurity.push({isin, name:sec.name, type:sec.type, byYear});
   });
 
   const years = [...yearsSet].sort();
@@ -880,7 +880,6 @@ document.getElementById('sortSecListBtn').addEventListener('click', (e)=>{
 });
 document.getElementById('fieldSelect').addEventListener('change', e=>{ state.field = e.target.value; render(); });
 document.getElementById('periodSelect').addEventListener('change', render);
-document.getElementById('colorMode').addEventListener('change', render);
 document.getElementById('showNominalCurve').addEventListener('change', render);
 document.getElementById('showRealCurve').addEventListener('change', render);
 document.getElementById('showInflationCurve').addEventListener('change', render);
@@ -895,6 +894,7 @@ document.getElementById('changeMeasure').addEventListener('change', render);
 document.getElementById('showDiffPanel').addEventListener('change', render);
 document.getElementById('steepnessCurveType').addEventListener('change', render);
 document.getElementById('steepnessMeasure').addEventListener('change', render);
+document.getElementById('steepnessPeriodSelect').addEventListener('change', render);
 document.querySelectorAll('.spread-toggle').forEach(cb=>cb.addEventListener('change', render));
 
 // Par yield isn't a meaningful concept for the implied-inflation curve
@@ -998,6 +998,7 @@ document.getElementById('sortPortfolioBtn').addEventListener('click', ()=>{
   renderPortfolioEditor();
 });
 document.getElementById('cashflowTerms').addEventListener('change', render);
+document.getElementById('cashflowColorMode').addEventListener('change', render);
 
 document.getElementById('savePortfolioBtn').addEventListener('click', ()=>{
   const nameRaw = (document.getElementById('portfolioName').value||'portfolio').trim();
@@ -1208,10 +1209,7 @@ function renderTimeSeries(){
   const showInfl = document.getElementById('showInflationCurve').checked;
   const overlayMeasure = document.getElementById('overlayMeasure').value;
   const periodMonths = periodCutoffMonths();
-  const colorMode = document.getElementById('colorMode').value;
-  const TYPE_COLORS = { conventional: COLORS[0], index_linked: COLORS[4] };
-  const secColor = s => colorMode==='type' ? TYPE_COLORS[s.type] || COLORS[0]
-                                             : COLORS[state.data.securities.indexOf(s)%COLORS.length];
+  const secColor = s => COLORS[state.data.securities.indexOf(s)%COLORS.length];
 
   // Anchor "trailing N months" to the most recent date across whatever
   // could be plotted, so the window always reflects the latest data --
@@ -1306,19 +1304,10 @@ function renderTimeSeries(){
   attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, tooltipSeries,
     v=>field==='yield' ? v.toFixed(3)+'%' : v.toFixed(3));
 
-  let legendHtml;
-  if(colorMode==='type'){
-    const typesPresent = new Set(selectedSecs.map(s=>s.type));
-    legendHtml = [...typesPresent].map(t=>
-      `<span class="legend-item"><span class="legend-swatch" style="background:${TYPE_COLORS[t]}"></span>`+
-      `${t==='conventional'?'Conventional':'Index-linked'}</span>`
-    ).join('');
-  } else {
-    legendHtml = selectedSecs.map(s=>{
-      const color = secColor(s);
-      return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.name}</span>`;
-    }).join('');
-  }
+  let legendHtml = selectedSecs.map(s=>{
+    const color = secColor(s);
+    return `<span class="legend-item"><span class="legend-swatch" style="background:${color}"></span>${s.name}</span>`;
+  }).join('');
   overlayTypes.forEach(([ct,color,label])=>{
     legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${color};border-top:2px dotted ${color}"></span>${label} ${state.maturity}y (${overlayMeasure})</span>`;
   });
@@ -1595,6 +1584,11 @@ function renderPortfolioChart(){
   const plotW=W-M.left-M.right, plotH=H-M.top-M.bottom;
 
   const terms = document.getElementById('cashflowTerms').value;
+  const cashflowColorMode = document.getElementById('cashflowColorMode').value;
+  const CASHFLOW_TYPE_COLORS = { conventional: COLORS[0], index_linked: COLORS[4] };
+  const barColor = (sec, si) => cashflowColorMode==='type'
+    ? (CASHFLOW_TYPE_COLORS[sec.type] || COLORS[0])
+    : COLORS[si%COLORS.length];
   const agg = aggregatePortfolioCashflows(terms);
 
   if(!agg.years.length){
@@ -1636,7 +1630,7 @@ function renderPortfolioChart(){
     agg.bySecurity.forEach((sec,si)=>{
       const val = sec.byYear.get(yr)||0;
       if(val<=0) return;
-      const color = COLORS[si%COLORS.length];
+      const color = barColor(sec, si);
       const y0=y(cum), y1=y(cum+val);
       svgParts.push(`<rect fill="${color}" x="${xx-barW/2}" y="${y1}" width="${barW}" height="${Math.max(1,y0-y1)}"/>`);
       cum += val;
@@ -1652,7 +1646,7 @@ function renderPortfolioChart(){
       const rows = agg.bySecurity.map((sec,si)=>{
         const val = sec.byYear.get(yr)||0;
         if(val<=0) return '';
-        return `<div><span style="color:${COLORS[si%COLORS.length]}">\u25cf</span> ${sec.name}: `+
+        return `<div><span style="color:${barColor(sec, si)}">\u25cf</span> ${sec.name}: `+
                `£${val.toLocaleString(undefined,{maximumFractionDigits:0})}</div>`;
       }).filter(Boolean).join('');
       const total = agg.bySecurity.reduce((s,sec)=>s+(sec.byYear.get(yr)||0),0);
