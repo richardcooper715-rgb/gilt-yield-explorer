@@ -1064,8 +1064,10 @@ document.getElementById('loadPortfolioFile').addEventListener('change', (e)=>{
 });
 
 document.getElementById('pastePortfolioBtn').addEventListener('click', ()=>{
+  console.log('DEBUG: paste button click handler fired');
   document.getElementById('paste-portfolio-panel').style.display = 'block';
   document.getElementById('pastePortfolioText').focus();
+  console.log('DEBUG: panel display is now', document.getElementById('paste-portfolio-panel').style.display);
 });
 document.getElementById('cancelPastedPortfolioBtn').addEventListener('click', ()=>{
   document.getElementById('paste-portfolio-panel').style.display = 'none';
