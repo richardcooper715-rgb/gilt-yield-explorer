@@ -873,6 +873,7 @@ document.querySelectorAll('.view-tab').forEach(btn=>{
       document.getElementById('controls-'+v).style.display = (v===state.view) ? 'flex' : 'none';
     });
     document.getElementById('portfolio-editor').style.display = (state.view==='portfolio') ? 'block' : 'none';
+    if(state.view!=='portfolio') document.getElementById('paste-portfolio-panel').style.display = 'none';
     document.getElementById('chart-wrap').style.display = (state.view==='portfolio') ? 'none' : 'block';
     render();
   });
@@ -1060,6 +1061,24 @@ document.getElementById('loadPortfolioFile').addEventListener('change', (e)=>{
   reader.onload = () => { applyLoadedPortfolioJson(reader.result); };
   reader.readAsText(file);
   e.target.value = ''; // allow reloading the same filename later
+});
+
+document.getElementById('pastePortfolioBtn').addEventListener('click', ()=>{
+  document.getElementById('paste-portfolio-panel').style.display = 'block';
+  document.getElementById('pastePortfolioText').focus();
+});
+document.getElementById('cancelPastedPortfolioBtn').addEventListener('click', ()=>{
+  document.getElementById('paste-portfolio-panel').style.display = 'none';
+  document.getElementById('pastePortfolioText').value = '';
+});
+document.getElementById('applyPastedPortfolioBtn').addEventListener('click', ()=>{
+  const text = document.getElementById('pastePortfolioText').value.trim();
+  if(!text){ alert('Paste the portfolio JSON text first.'); return; }
+  const ok = applyLoadedPortfolioJson(text);
+  if(ok){
+    document.getElementById('paste-portfolio-panel').style.display = 'none';
+    document.getElementById('pastePortfolioText').value = '';
+  }
 });
 
 // ---- render dispatch ----------------------------------------------------
