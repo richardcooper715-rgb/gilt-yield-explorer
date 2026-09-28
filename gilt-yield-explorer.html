@@ -77,13 +77,32 @@
     font-size:13px;
     margin-bottom:10px;
   }
-  .sec-group-label{
+  .grp-header{
+    display:flex;
+    align-items:center;
+    gap:6px;
+    margin-top:8px;
+    padding:5px 4px;
+    border-radius:4px;
+    cursor:pointer;
+    user-select:none;
     font-size:11px;
     text-transform:uppercase;
     letter-spacing:0.6px;
     color:var(--ink-soft);
-    margin:14px 0 6px;
   }
+  .grp-header:hover{ background:var(--hover); }
+  .grp-arrow{ width:10px; flex:none; text-align:center; }
+  .grp-label{ flex:1; }
+  .grp-count{ font-size:10.5px; text-transform:none; letter-spacing:0; }
+  .sec-group .sec-group .grp-header{
+    text-transform:none;
+    letter-spacing:0;
+    font-size:12px;
+    margin-top:2px;
+    padding-left:12px;
+  }
+  .sec-group .sec-group .grp-body{ padding-left:6px; }
   .sec-item{
     display:flex;
     align-items:center;
@@ -199,8 +218,11 @@
   <div class="layout">
     <aside>
       <input class="search" id="search" placeholder="Search by name or ISIN…" />
-      <div style="display:flex; gap:6px; margin:6px 0 2px;">
-        <button class="btn btn-small" id="sortSecListBtn" style="flex:1;">Sort by maturity</button>
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin:6px 0 2px;">
+        <button class="btn btn-small btn-primary" id="sortSecListBtn" style="flex:1 1 100%;"
+          title="Group securities into maturity ranges (click again for a flat list)">Group by maturity range</button>
+        <button class="btn btn-small" id="collapseAllBtn" style="flex:1;">Collapse all</button>
+        <button class="btn btn-small" id="expandAllBtn" style="flex:1;">Expand all</button>
       </div>
       <div id="sec-list"></div>
     </aside>
@@ -470,7 +492,7 @@ function genRpiHistory(startMonth,endMonth,base,annualGrowthPct){
   return out;
 }
 
-const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield', portfolio:[], secListSortByMaturity:false };
+const state = { data:null, selected:new Set(), maturity:10, view:'timeseries', field:'yield', portfolio:[], secListGrouped:true, collapsed:new Set() };
 
 async function loadData(){
   try{
@@ -486,55 +508,151 @@ async function loadData(){
       'Showing SAMPLE data (gilt_yields.json not found alongside this file — run fetch_gilt_data.py '+
       'and place its output next to this HTML to see real DMO + BoE data).';
   }
+  // pre-select first two securities (before building the list, so their
+  // checkboxes are ticked and their groups start open)
+  state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
+  initSecListCollapseDefaults();
   buildSecurityList();
   buildMaturityOptions();
   initDateInputs();
-  // pre-select first two securities
-  state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
   if(state.data.securities.length) state.portfolio = [{isin: state.data.securities[0].isin, units: 100000}];
   renderPortfolioEditor();
   render();
 }
 
+// ---- security list: grouping, collapsing, search ---------------------
+
+// Ranges are measured from today for live gilts; matured gilts (most of
+// the DMO history) are bucketed by the decade they matured in instead.
+function maturityBucket(sec, today){
+  const d = sec.redemption_date;
+  if(!d) return {key:'none', label:'No maturity date', order:99};
+  if(d < today){
+    const yr = +d.slice(0,4);
+    if(yr >= 2020) return {key:'m2020', label:'Matured 2020s', order:10};
+    if(yr >= 2010) return {key:'m2010', label:'Matured 2010s', order:11};
+    if(yr >= 2000) return {key:'m2000', label:'Matured 2000s', order:12};
+    return {key:'mpre', label:'Matured before 2000', order:13};
+  }
+  const yrs = (new Date(d) - new Date(today)) / (365.25*86400000);
+  if(yrs < 5)  return {key:'y0',  label:'Under 5 years', order:1};
+  if(yrs < 10) return {key:'y5',  label:'5\u201310 years', order:2};
+  if(yrs < 20) return {key:'y10', label:'10\u201320 years', order:3};
+  if(yrs < 30) return {key:'y20', label:'20\u201330 years', order:4};
+  return {key:'y30', label:'30+ years', order:5};
+}
+
+function byMaturityThenName(a,b){
+  const dA = a.redemption_date || '9999-99-99';
+  const dB = b.redemption_date || '9999-99-99';
+  if(dA!==dB) return dA<dB ? -1 : 1;
+  return a.name<b.name ? -1 : a.name>b.name ? 1 : 0;
+}
+
+// Split securities into type sections, each with maturity-range groups.
+// `filterFn` (optional) restricts to matching securities, for search.
+function groupSecurities(filterFn){
+  const today = new Date().toISOString().slice(0,10);
+  const types = [
+    {key:'conventional', label:'Conventional', items:[], ranges:new Map()},
+    {key:'index_linked', label:'Index-linked', items:[], ranges:new Map()}
+  ];
+  state.data.securities.forEach(s=>{
+    if(filterFn && !filterFn(s)) return;
+    const t = s.type==='index_linked' ? types[1] : types[0];
+    t.items.push(s);
+    const b = maturityBucket(s, today);
+    if(!t.ranges.has(b.key)) t.ranges.set(b.key, {key:b.key, label:b.label, order:b.order, items:[]});
+    t.ranges.get(b.key).items.push(s);
+  });
+  types.forEach(t=>{
+    t.rangeList = [...t.ranges.values()].sort((a,b)=>a.order-b.order);
+    t.rangeList.forEach(r=>r.items.sort(byMaturityThenName));
+  });
+  return types;
+}
+
+const typeGroupKey  = t => 't:'+t.key;
+const rangeGroupKey = (t,r) => 'r:'+t.key+':'+r.key;
+
+function setCollapsedFlag(key, on){
+  if(on) state.collapsed.add(key); else state.collapsed.delete(key);
+}
+
+// Sensible starting point: type sections open, maturity ranges closed --
+// except any range holding a security that's already selected.
+function initSecListCollapseDefaults(){
+  groupSecurities().forEach(t=>{
+    t.rangeList.forEach(r=>{
+      const hasSelected = r.items.some(s=>state.selected.has(s.isin));
+      setCollapsedFlag(rangeGroupKey(t,r), !hasSelected);
+    });
+  });
+}
+
+function setAllSecGroupsCollapsed(collapse){
+  groupSecurities().forEach(t=>{
+    setCollapsedFlag(typeGroupKey(t), collapse);
+    t.rangeList.forEach(r=>setCollapsedFlag(rangeGroupKey(t,r), collapse));
+  });
+  buildSecurityList();
+}
+
+// Refresh the "N \u00b7 M selected" counts on every group header.
+function updateGroupBadges(){
+  document.querySelectorAll('#sec-list .grp-header').forEach(h=>{
+    const body = h.nextElementSibling;
+    const total = body.querySelectorAll('input[type=checkbox]').length;
+    const sel = body.querySelectorAll('input[type=checkbox]:checked').length;
+    h.querySelector('.grp-count').textContent = total + (sel ? ` \u00b7 ${sel} selected` : '');
+  });
+}
+
 function buildSecurityList(){
   const list = document.getElementById('sec-list');
-  const groups = { conventional: [], index_linked: [] };
-  state.data.securities.forEach(s=> (groups[s.type]||groups.conventional).push(s));
+  const q = document.getElementById('search').value.trim().toLowerCase();
+  const searching = q.length>0;
+  const colorIdx = new Map(state.data.securities.map((s,i)=>[s,i]));
+  const matches = s => s.name.toLowerCase().includes(q) || s.isin.toLowerCase().includes(q);
+  const types = groupSecurities(searching ? matches : null);
 
-  if(state.secListSortByMaturity){
-    const byMaturity = (a,b)=>{
-      const dA = a.redemption_date || '9999-99-99';
-      const dB = b.redemption_date || '9999-99-99';
-      return dA<dB ? -1 : dA>dB ? 1 : 0;
-    };
-    groups.conventional.sort(byMaturity);
-    groups.index_linked.sort(byMaturity);
-  }
+  const itemHtml = s => {
+    const color = COLORS[colorIdx.get(s)%COLORS.length];
+    return `<label class="sec-item">
+      <input type="checkbox" data-isin="${s.isin}">
+      <span class="swatch" style="background:${color}"></span>
+      <span class="name">${s.name}</span>
+      <span class="isin">${s.isin}</span>
+    </label>`;
+  };
 
-  function renderGroup(label, arr){
-    if(!arr.length) return '';
-    return `<div class="sec-group-label">${label}</div>` + arr.map((s,i)=>{
-      const color = COLORS[(state.data.securities.indexOf(s))%COLORS.length];
-      return `<label class="sec-item" data-name="${s.name.toLowerCase()}" data-isin="${s.isin.toLowerCase()}">
-        <input type="checkbox" data-isin="${s.isin}">
-        <span class="swatch" style="background:${color}"></span>
-        <span class="name">${s.name}</span>
-        <span class="isin">${s.isin}</span>
-      </label>`;
-    }).join('');
-  }
+  // Searching always shows every matching group open, whatever the
+  // saved collapse state, so results are never hidden.
+  const groupHtml = (key, label, bodyHtml) => {
+    const collapsed = !searching && state.collapsed.has(key);
+    return `<div class="sec-group">
+      <div class="grp-header" data-key="${key}">
+        <span class="grp-arrow">${collapsed ? '\u25b8' : '\u25be'}</span>
+        <span class="grp-label">${label}</span>
+        <span class="grp-count"></span>
+      </div>
+      <div class="grp-body"${collapsed ? ' style="display:none"' : ''}>${bodyHtml}</div>
+    </div>`;
+  };
 
-  list.innerHTML = renderGroup('Conventional', groups.conventional) +
-                    renderGroup('Index-linked', groups.index_linked);
+  const html = types.filter(t=>t.items.length).map(t=>{
+    const inner = state.secListGrouped
+      ? t.rangeList.map(r=>groupHtml(rangeGroupKey(t,r), r.label, r.items.map(itemHtml).join(''))).join('')
+      : t.items.map(itemHtml).join('');
+    return groupHtml(typeGroupKey(t), t.label, inner);
+  }).join('');
+
+  list.innerHTML = html || '<div class="portfolio-empty">No securities match.</div>';
 
   list.querySelectorAll('input[type=checkbox]').forEach(cb=>{
     cb.checked = state.selected.has(cb.dataset.isin);
-    cb.addEventListener('change', ()=>{
-      if(cb.checked) state.selected.add(cb.dataset.isin);
-      else state.selected.delete(cb.dataset.isin);
-      render();
-    });
   });
+  updateGroupBadges();
 }
 
 function buildMaturityOptions(){
@@ -879,17 +997,33 @@ document.querySelectorAll('.view-tab').forEach(btn=>{
   });
 });
 
-document.getElementById('search').addEventListener('input', (e)=>{
-  const q = e.target.value.toLowerCase();
-  document.querySelectorAll('.sec-item').forEach(el=>{
-    const match = el.dataset.name.includes(q) || el.dataset.isin.includes(q);
-    el.style.display = match ? 'flex' : 'none';
-  });
-});
+document.getElementById('search').addEventListener('input', buildSecurityList);
 document.getElementById('sortSecListBtn').addEventListener('click', (e)=>{
-  state.secListSortByMaturity = !state.secListSortByMaturity;
-  e.target.classList.toggle('btn-primary', state.secListSortByMaturity);
+  state.secListGrouped = !state.secListGrouped;
+  e.currentTarget.classList.toggle('btn-primary', state.secListGrouped);
   buildSecurityList();
+});
+document.getElementById('collapseAllBtn').addEventListener('click', ()=>setAllSecGroupsCollapsed(true));
+document.getElementById('expandAllBtn').addEventListener('click', ()=>setAllSecGroupsCollapsed(false));
+
+// One delegated listener each for expanding/collapsing groups and for
+// ticking securities, instead of one per row.
+document.getElementById('sec-list').addEventListener('click', (e)=>{
+  const header = e.target.closest('.grp-header');
+  if(!header) return;
+  const key = header.dataset.key;
+  const nowCollapsed = !state.collapsed.has(key);
+  setCollapsedFlag(key, nowCollapsed);
+  header.nextElementSibling.style.display = nowCollapsed ? 'none' : '';
+  header.querySelector('.grp-arrow').textContent = nowCollapsed ? '\u25b8' : '\u25be';
+});
+document.getElementById('sec-list').addEventListener('change', (e)=>{
+  const cb = e.target;
+  if(!cb.matches || !cb.matches('input[type=checkbox]')) return;
+  if(cb.checked) state.selected.add(cb.dataset.isin);
+  else state.selected.delete(cb.dataset.isin);
+  updateGroupBadges();
+  render();
 });
 document.getElementById('fieldSelect').addEventListener('change', e=>{ state.field = e.target.value; render(); });
 document.getElementById('periodSelect').addEventListener('change', render);
@@ -1064,10 +1198,8 @@ document.getElementById('loadPortfolioFile').addEventListener('change', (e)=>{
 });
 
 document.getElementById('pastePortfolioBtn').addEventListener('click', ()=>{
-  console.log('DEBUG: paste button click handler fired');
   document.getElementById('paste-portfolio-panel').style.display = 'block';
   document.getElementById('pastePortfolioText').focus();
-  console.log('DEBUG: panel display is now', document.getElementById('paste-portfolio-panel').style.display);
 });
 document.getElementById('cancelPastedPortfolioBtn').addEventListener('click', ()=>{
   document.getElementById('paste-portfolio-panel').style.display = 'none';
