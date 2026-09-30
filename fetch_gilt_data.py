@@ -74,11 +74,26 @@ free public sources:
      DMO_RAW_DIR, this needs a manually-downloaded export in RPI_RAW_DIR
      (see fetch_rpi_history's docstring for exact steps).
 
+  4. Hargreaves Lansdown's public daily gilt-price pages (no login)
+     https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-gilts
+     https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-index-linked-gilts
+     -> fills the daily security-level gap left once DMO stopped
+        publishing per-security prices in 2017 -- previously only
+        available via slow, one-by-one manual Tradeweb downloads. Plain
+        server-rendered HTML tables, confirmed scrapable with no login.
+        HL shows clean price; this script adds accrued interest
+        (Actual/Actual, index-ratio-adjusted for linkers) to get the
+        dirty_price the rest of the app expects. Data is from NetBuilder,
+        a market data vendor -- solid for this app's purposes, but not
+        as authoritative as DMO/BoE/ONS, and HL could change their page
+        layout at any time (this parser fails loudly, with diagnostics,
+        rather than silently, if that happens).
+
 Run:
 
     pip install requests beautifulsoup4 openpyxl xlrd pandas
     python fetch_gilt_data.py                    # full run, all sources
-    python fetch_gilt_data.py --only boe-latest   # fast daily refresh
+    python fetch_gilt_data.py --only boe-latest,hl-prices  # daily refresh
     python fetch_gilt_data.py --only dmo          # e.g. after adding new
                                                    # dmo_raw/ files
     python fetch_gilt_data.py --only rpi          # after adding/updating
@@ -104,7 +119,8 @@ import json
 import os
 import re
 import zipfile
-from datetime import datetime
+import calendar
+from datetime import date, datetime
 
 import requests
 from bs4 import BeautifulSoup
@@ -966,6 +982,228 @@ def fetch_il_index_ratio_anchors():
 
 
 # ---------------------------------------------------------------------------
+# Hargreaves Lansdown daily gilt prices (fills the daily security-level gap
+# now that DMO no longer publishes per-security prices post-cutover, and
+# Tradeweb requires slow one-by-one manual downloads).
+# ---------------------------------------------------------------------------
+#
+# HL's public bond-price pages (no login required) are plain server-rendered
+# HTML tables -- confirmed by fetching them directly. Two pages, matching
+# our own conventional/index_linked split:
+HL_CONVENTIONAL_URL = "https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-gilts"
+HL_INDEX_LINKED_URL = "https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-index-linked-gilts"
+
+ISIN_RE = re.compile(r"\bGB00[0-9A-Z]{7}\d\b")
+
+
+def _find_hl_table(soup):
+    """HL's page may contain more than one <table>; find the one that
+    looks like the gilt price table (has 'issuer' and 'coupon' headers)."""
+    for table in soup.find_all("table"):
+        header_cells = table.find("tr")
+        if not header_cells:
+            continue
+        headers = [c.get_text(strip=True).lower() for c in header_cells.find_all(["th", "td"])]
+        if any("issuer" in h for h in headers) and any("coupon" in h for h in headers):
+            return table, headers
+    return None, None
+
+
+def parse_hl_gilt_table(html, is_index_linked):
+    """Parse one HL bond-price page into {isin: {...}}. Returns {} (with a
+    printed diagnostic) if the page doesn't match the expected layout --
+    same defensive pattern used elsewhere in this script, since HL could
+    change their page structure at any time.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    table, headers = _find_hl_table(soup)
+    if table is None:
+        all_tables = soup.find_all("table")
+        print(f"  WARNING: could not find a gilt price table on the HL "
+              f"page (found {len(all_tables)} <table> element(s), none "
+              f"with 'issuer'+'coupon' headers). Page title: "
+              f"{(soup.title.string.strip() if soup.title and soup.title.string else '?')!r}")
+        return {}
+
+    def col(*keywords):
+        for i, h in enumerate(headers):
+            if all(k in h for k in keywords):
+                return i
+        return None
+
+    idx_issuer = col("issuer")
+    idx_coupon = col("coupon")
+    idx_maturity = col("maturity")
+    idx_price = col("price")
+    idx_ytm0 = col("ytm", "0")  # "YTM 0% tax" -- effectively the gross yield
+
+    result = {}
+    rows = table.find_all("tr")[1:]  # skip header row
+    for r in rows:
+        cells = r.find_all("td")
+        if not cells or idx_issuer is None or idx_issuer >= len(cells):
+            continue
+        issuer_text = cells[idx_issuer].get_text(" ", strip=True)
+        m = ISIN_RE.search(issuer_text)
+        if not m:
+            continue
+        isin = m.group(0)
+
+        def cell_num(idx):
+            if idx is None or idx >= len(cells):
+                return None
+            txt = cells[idx].get_text(strip=True).replace(",", "")
+            try:
+                return float(txt)
+            except ValueError:
+                return None
+
+        price = cell_num(idx_price)
+        if price is None:
+            continue
+        coupon_pct = cell_num(idx_coupon)
+        maturity_date = None
+        if idx_maturity is not None and idx_maturity < len(cells):
+            md = pd.to_datetime(cells[idx_maturity].get_text(strip=True),
+                                 errors="coerce", dayfirst=True)
+            if md is not None and not pd.isna(md):
+                maturity_date = md.strftime("%Y-%m-%d")
+
+        result[isin] = {
+            "name": cells[idx_issuer].get_text(" ", strip=True).split(" GBP")[0].strip(),
+            "coupon_pct": coupon_pct,
+            "maturity_date": maturity_date,
+            "clean_price": price,
+            "yield_pct": cell_num(idx_ytm0),
+            "type": "index_linked" if is_index_linked else "conventional",
+        }
+    return result
+
+
+def fetch_hl_gilt_prices():
+    """Fetch and parse both HL bond-price pages. Returns {isin: {...}},
+    or {} for a page that fails (with diagnostics printed), so a problem
+    with one page doesn't lose data from the other.
+    """
+    combined = {}
+    for url, is_il in ((HL_CONVENTIONAL_URL, False), (HL_INDEX_LINKED_URL, True)):
+        try:
+            resp = requests.get(url, headers=HEADERS, timeout=30)
+            resp.raise_for_status()
+        except Exception as e:
+            print(f"  could not fetch {url}: {e}")
+            continue
+        parsed = parse_hl_gilt_table(resp.text, is_il)
+        print(f"  parsed {len(parsed)} {'index-linked' if is_il else 'conventional'} "
+              f"gilt prices from {url}")
+        combined.update(parsed)
+    return combined
+
+
+# ---- accrued interest / dirty price -----------------------------------
+
+def _add_months(d, n):
+    month = d.month - 1 + n
+    year = d.year + month // 12
+    month = month % 12 + 1
+    day = min(d.day, calendar.monthrange(year, month)[1])
+    return date(year, month, day)
+
+
+def _coupon_window(redemption_date_str, today):
+    """Last and next semi-annual coupon dates (day/month anchored on the
+    redemption date) bracketing `today`. None if already matured."""
+    redemption = date.fromisoformat(redemption_date_str)
+    if today >= redemption:
+        return None
+    d = redemption
+    guard = 0
+    while d > today and guard < 200:
+        d = _add_months(d, -6)
+        guard += 1
+    return d, _add_months(d, 6)
+
+
+def compute_dirty_price(clean_price, coupon_pct, redemption_date_str, today,
+                         index_ratio=None):
+    """Dirty price = clean price + accrued interest, using the standard
+    Actual/Actual semi-annual convention. `index_ratio` (if given)
+    inflation-adjusts the accrued interest for index-linked gilts, using
+    the closest thing we have -- the DMO-anchored index ratio -- rather
+    than a full Reference Index recomputation, which is a reasonable
+    approximation given how small accrued interest is relative to price.
+    Does NOT model the UK ex-dividend period (a further, smaller
+    simplification, consistent with the rest of this app's approach to
+    index-linked gilts).
+    """
+    if clean_price is None or coupon_pct is None or not redemption_date_str:
+        return clean_price
+    window = _coupon_window(redemption_date_str, today)
+    if window is None:
+        return clean_price  # matured -- no accrual to add
+    last_coupon, next_coupon = window
+    days_since = (today - last_coupon).days
+    days_in_period = (next_coupon - last_coupon).days
+    if days_in_period <= 0:
+        return clean_price
+    ai = (coupon_pct / 2) * (days_since / days_in_period)
+    if index_ratio:
+        ai *= index_ratio
+    return round(clean_price + ai, 4)
+
+
+def apply_hl_prices(securities, hl_data, il_index_ratio_anchors):
+    """Merge today's HL prices into `securities` (mutates and returns it):
+    updates today's series point for matching ISINs (adding one if not
+    already present for today), and creates a new minimal security entry
+    for any ISIN HL has that we don't -- e.g. a gilt issued after our
+    last DMO/Tradeweb data. Dirty price is computed from HL's clean price
+    via compute_dirty_price(); yield comes straight from HL for
+    conventional gilts (HL doesn't publish one for linkers).
+    """
+    today_str = datetime.utcnow().strftime("%Y-%m-%d")
+    today = date.fromisoformat(today_str)
+    by_isin = {s["isin"]: s for s in securities}
+    ratios = (il_index_ratio_anchors or {}).get("ratios", {})
+    updated, added = 0, 0
+
+    for isin, hl in hl_data.items():
+        sec = by_isin.get(isin)
+        if sec is None:
+            sec = {
+                "isin": isin,
+                "name": hl["name"],
+                "type": hl["type"],
+                "redemption_date": hl["maturity_date"],
+                "coupon_pct": hl["coupon_pct"],
+                "series": [],
+                "first_price_date": today_str,
+            }
+            securities.append(sec)
+            by_isin[isin] = sec
+            added += 1
+
+        redemption_date = sec.get("redemption_date") or hl["maturity_date"]
+        index_ratio = ratios.get(isin) if sec["type"] == "index_linked" else None
+        dirty_price = compute_dirty_price(hl["clean_price"], sec.get("coupon_pct"),
+                                           redemption_date, today, index_ratio)
+        point = {
+            "date": today_str,
+            "yield": hl["yield_pct"],  # None for index-linked -- HL doesn't publish one
+            "dirty_price": dirty_price,
+        }
+        if sec["series"] and sec["series"][-1]["date"] == today_str:
+            sec["series"][-1] = point
+        else:
+            sec["series"].append(point)
+        updated += 1
+
+    print(f"  applied HL prices to {updated} securities ({added} newly "
+          f"added, not previously in the dataset)")
+    return securities
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -975,14 +1213,14 @@ def main():
     parser.add_argument(
         "--only", default="all",
         help=("Comma-separated components to run: dmo, boe-archive, "
-              "boe-latest, rpi, il-ratios, or 'all' (default). Skipped "
-              "components reuse their data from the existing "
-              "gilt_yields.json if present. E.g. --only boe-latest for a "
-              "fast daily refresh; --only dmo,boe-archive to skip the "
-              "daily-only piece."))
+              "boe-latest, rpi, il-ratios, hl-prices, or 'all' (default). "
+              "Skipped components reuse their data from the existing "
+              "gilt_yields.json if present. E.g. --only boe-latest,"
+              "hl-prices for a fast daily refresh; --only dmo,boe-archive "
+              "to skip the daily-only pieces."))
     args = parser.parse_args()
 
-    valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios"}
+    valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios", "hl-prices"}
     components = valid if args.only == "all" else set(args.only.split(","))
     unknown = components - valid
     if unknown:
@@ -1060,6 +1298,19 @@ def main():
         print(f"\n=== Skipping IL index-ratio anchors (--only) -- reusing "
               f"existing gilt_yields.json data ===")
 
+    # --- HL daily gilt prices (security-level daily update, no manual
+    # Tradeweb download needed) ---
+    if "hl-prices" in components:
+        print("\n=== Fetching Hargreaves Lansdown daily gilt prices ===")
+        hl_data = fetch_hl_gilt_prices()
+        if hl_data:
+            securities = apply_hl_prices(securities, hl_data, il_index_ratio_anchors)
+        else:
+            print("  no HL prices fetched -- leaving securities unchanged "
+                  "for today.")
+    else:
+        print("\n=== Skipping HL daily prices (--only) ===")
+
     output = {
         "generated": datetime.utcnow().isoformat() + "Z",
         "cutover_date": CUTOVER_DATE,
@@ -1092,7 +1343,15 @@ def main():
             "for the app's Portfolio Cashflows tab. rpi_history[]: "
             "DMO's published UK RPI series (report D4O), used the same "
             "way, per DMO's published Reference Index formula (see "
-            "igcalc.pdf) -- computed client-side, not by this script."
+            "igcalc.pdf) -- computed client-side, not by this script. "
+            "Each security's most recent series point may come from "
+            "Hargreaves Lansdown's public daily gilt-price pages (no DMO/"
+            "Tradeweb equivalent exists post-cutover) rather than DMO -- "
+            "dirty_price is computed from HL's clean price plus accrued "
+            "interest (Actual/Actual, index-ratio-adjusted for linkers "
+            "using the DMO anchor above; the UK ex-dividend period isn't "
+            "modelled). yield is HL's gross YTM for conventional gilts, "
+            "null for linkers (HL doesn't publish one)."
         ),
         "securities": securities,
         "curves": curves,

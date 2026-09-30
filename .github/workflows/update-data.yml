@@ -5,10 +5,14 @@
 #   - Runs every day at 13:00 UTC (2pm UK time while BST is in effect;
 #     1pm once clocks go back to GMT in late October -- GitHub Actions
 #     cron has no timezone/DST awareness, so this drifts by an hour
-#     twice a year unless you adjust it) with `--only boe-latest`, a
-#     fast fetch of just BoE's daily-updated "latest yield curve data"
-#     file. Set for 2pm rather than earlier because BoE aim to publish
-#     by noon UK time but don't always land right at noon.
+#     twice a year unless you adjust it) with `--only boe-latest,
+#     hl-prices`: BoE's daily-updated "latest yield curve data" file,
+#     plus a fresh security-level price for every current gilt from
+#     Hargreaves Lansdown's public price pages (dirty price computed
+#     from HL's clean price + accrued interest). Set for 2pm rather
+#     than earlier because BoE aim to publish by noon UK time but
+#     don't always land right at noon, and to give HL's own prices
+#     time to reflect the day's trading.
 #   - Runs once a month (3rd, 14:00 UTC, same reasoning) with `--only
 #     all`, which also re-fetches DMO + the BoE monthly archive zips --
 #     this catches any data revisions BoE makes and keeps everything in
@@ -35,7 +39,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Components to run: dmo, boe-archive, boe-latest (comma-separated) or 'all'"
+        description: "Components to run: dmo, boe-archive, boe-latest, rpi, il-ratios, hl-prices (comma-separated) or 'all'"
         required: false
         default: 'all'
 
@@ -64,7 +68,7 @@ jobs:
           elif [ "${{ github.event.schedule }}" = "0 14 3 * *" ]; then
             ARGS="--only all"
           else
-            ARGS="--only boe-latest"
+            ARGS="--only boe-latest,hl-prices"
           fi
           echo "Running: python fetch_gilt_data.py $ARGS"
           python fetch_gilt_data.py $ARGS
