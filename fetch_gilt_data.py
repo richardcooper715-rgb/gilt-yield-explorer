@@ -78,24 +78,42 @@ free public sources:
      https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-gilts
      https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-prices/uk-index-linked-gilts
      -> fills the daily security-level gap left once DMO stopped
-        publishing per-security prices in 2017 -- previously only
-        available via slow, one-by-one manual Tradeweb downloads. Plain
-        server-rendered HTML tables, confirmed scrapable with no login.
+        publishing per-security prices in 2017. The conventional gilts
+        page is a plain server-rendered HTML table and scrapes cleanly.
+        The index-linked page, confirmed by diagnostics, loads its price
+        data via client-side JavaScript that a plain HTTP request never
+        sees -- it returns an empty table shell, so this source only
+        ever covers conventional gilts; see source 5 for linkers.
         HL shows clean price; this script adds accrued interest
-        (Actual/Actual, index-ratio-adjusted for linkers) to get the
+        (Actual/Actual, index-ratio-adjusted for linkers, though HL
+        itself never actually supplies linker data) to get the
         dirty_price the rest of the app expects. Data is from NetBuilder,
         a market data vendor -- solid for this app's purposes, but not
         as authoritative as DMO/BoE/ONS, and HL could change their page
         layout at any time (this parser fails loudly, with diagnostics,
         rather than silently, if that happens).
 
+  5. Manually-downloaded Tradeweb daily export CSVs (TRADEWEB_RAW_DIR)
+     -> covers what HL's linkers page can't (see source 4) and gives a
+        second, more complete opinion on conventional gilts too --
+        Tradeweb provides dirty price AND yield directly for both
+        conventional and index-linked gilts, no accrued-interest
+        estimation needed. Drop the raw exported CSV in unmodified (no
+        column-header or gilt-name renaming required, unlike this
+        project's very early manual workflow) -- parse_tradeweb_csv
+        reads Tradeweb's own native column names directly. Bills and
+        Strips rows are skipped; only Conventional and Index-linked
+        rows become securities.
+
 Run:
 
     pip install requests beautifulsoup4 openpyxl xlrd pandas
     python fetch_gilt_data.py                    # full run, all sources
-    python fetch_gilt_data.py --only boe-latest,hl-prices  # daily refresh
+    python fetch_gilt_data.py --only boe-latest,hl-prices,tradeweb  # daily
     python fetch_gilt_data.py --only dmo          # e.g. after adding new
                                                    # dmo_raw/ files
+    python fetch_gilt_data.py --only tradeweb     # after adding a file
+                                                   # to tradeweb_raw/
     python fetch_gilt_data.py --only rpi          # after adding/updating
                                                    # a file in rpi_raw/
     python fetch_gilt_data.py --only dmo,boe-archive
@@ -149,6 +167,8 @@ RPI_RAW_DIR = "./rpi_raw"  # put a manually-downloaded DMO RPI Data export here
 IL_GILTS_RAW_DIR = "./il_gilts_raw"  # put a manually-downloaded DMO "Index-linked
                                      # Gilts in Issue" export here (see
                                      # fetch_il_index_ratio_anchors docstring)
+TRADEWEB_RAW_DIR = "./tradeweb_raw"  # drop raw Tradeweb daily export CSVs here,
+                                     # unmodified -- see parse_tradeweb_csv
 
 CUTOVER_DATE = "2017-07-21"  # last DMO reference price date
 
@@ -1277,6 +1297,134 @@ def apply_hl_prices(securities, hl_data, il_index_ratio_anchors):
 
 
 # ---------------------------------------------------------------------------
+# Tradeweb daily export CSVs (manual download, dropped in raw/unmodified --
+# covers linkers automatically, since HL's linkers page can't be scraped)
+# ---------------------------------------------------------------------------
+
+TRADEWEB_TYPE_MAP = {"conventional": "conventional", "index-linked": "index_linked"}
+
+
+def discover_tradeweb_raw_files():
+    if not os.path.isdir(TRADEWEB_RAW_DIR):
+        return []
+    return sorted(
+        os.path.join(TRADEWEB_RAW_DIR, fn) for fn in os.listdir(TRADEWEB_RAW_DIR)
+        if fn.lower().endswith(".csv"))
+
+
+def _tradeweb_name(coupon_pct, maturity_date, is_il):
+    coupon_str = f"{coupon_pct:g}"
+    year = maturity_date[:4]
+    kind = "Index-Linked Treasury Gilt" if is_il else "Treasury Gilt"
+    return f"{coupon_str}% {kind} {year}"
+
+
+def parse_tradeweb_csv(path):
+    """Parse one raw Tradeweb daily export exactly as downloaded -- no
+    manual column-header or gilt-name renaming needed. Expects the
+    columns Tradeweb actually exports: Gilt Name, Close of Business
+    Date, ISIN, Type, Coupon, Maturity, Clean Price, Dirty Price,
+    Yield, Mod Duration, Accrued Interest (dates as DD/MM/YYYY).
+
+    Only "Conventional" and "Index-linked" rows are kept -- Bills and
+    Strips are different instrument types this app doesn't model.
+    Tradeweb gives dirty price and yield directly for BOTH conventional
+    and index-linked gilts (unlike HL, which has no linker yield), so
+    no accrued-interest estimation is needed for this source.
+
+    Returns a list of row dicts: isin, name, type, redemption_date,
+    coupon_pct, date, yield, dirty_price. Prints a diagnostic (column
+    names found) and returns [] if the file doesn't look right, rather
+    than silently producing nothing -- same pattern as the rest of this
+    script's manual-download sources.
+    """
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig", dtype=str)
+    except Exception as e:
+        print(f"  could not read {path}: {e}")
+        return []
+
+    required = {"Gilt Name", "Close of Business Date", "ISIN", "Type",
+                "Coupon", "Maturity", "Dirty Price", "Yield"}
+    missing = required - set(df.columns)
+    if missing:
+        print(f"  WARNING: {path} is missing expected column(s) {missing}. "
+              f"Columns found: {list(df.columns)!r}")
+        return []
+
+    rows = []
+    skipped_type = 0
+    for _, r in df.iterrows():
+        type_key = str(r["Type"]).strip().lower()
+        if type_key not in TRADEWEB_TYPE_MAP:
+            skipped_type += 1
+            continue  # Bills, Strips, or anything else -- not a gilt we track
+        isin = str(r["ISIN"]).strip()
+        date = pd.to_datetime(r["Close of Business Date"], errors="coerce", dayfirst=True)
+        maturity = pd.to_datetime(r["Maturity"], errors="coerce", dayfirst=True)
+        coupon = pd.to_numeric(r["Coupon"], errors="coerce")
+        dirty = pd.to_numeric(r["Dirty Price"], errors="coerce")
+        yld = pd.to_numeric(r["Yield"], errors="coerce")
+        if pd.isna(date) or pd.isna(maturity) or pd.isna(coupon) or pd.isna(dirty):
+            continue
+        is_il = TRADEWEB_TYPE_MAP[type_key] == "index_linked"
+        maturity_str = maturity.strftime("%Y-%m-%d")
+        rows.append({
+            "isin": isin,
+            "name": _tradeweb_name(coupon, maturity_str, is_il),
+            "type": TRADEWEB_TYPE_MAP[type_key],
+            "redemption_date": maturity_str,
+            "coupon_pct": float(coupon),
+            "date": date.strftime("%Y-%m-%d"),
+            "yield": None if pd.isna(yld) else float(yld),
+            "dirty_price": float(dirty),
+        })
+
+    print(f"  parsed {len(rows)} gilt rows from {path} "
+          f"({skipped_type} Bills/Strips/other rows skipped)")
+    return rows
+
+
+def build_tradeweb_securities():
+    """Parse every file in TRADEWEB_RAW_DIR and aggregate into the same
+    per-security {isin, name, type, redemption_date, coupon_pct, series}
+    shape build_dmo_dataset() produces, so it can be merged the same way
+    via merge_dmo_into_previous().
+    """
+    files = discover_tradeweb_raw_files()
+    if not files:
+        print(f"  no files found in {TRADEWEB_RAW_DIR}")
+        return []
+    print(f"  found {len(files)} Tradeweb export file(s) in "
+          f"{TRADEWEB_RAW_DIR}: {files}")
+
+    all_rows = []
+    for path in files:
+        all_rows.extend(parse_tradeweb_csv(path))
+
+    securities = {}
+    for row in all_rows:
+        sec = securities.setdefault(row["isin"], {
+            "isin": row["isin"],
+            "name": row["name"],
+            "type": row["type"],
+            "redemption_date": row["redemption_date"],
+            "coupon_pct": row["coupon_pct"],
+            "series": [],
+        })
+        sec["series"].append({
+            "date": row["date"],
+            "yield": row["yield"],
+            "dirty_price": row["dirty_price"],
+        })
+
+    for sec in securities.values():
+        sec["series"].sort(key=lambda p: p["date"])
+
+    return list(securities.values())
+
+
+# ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
 
@@ -1286,14 +1434,16 @@ def main():
     parser.add_argument(
         "--only", default="all",
         help=("Comma-separated components to run: dmo, boe-archive, "
-              "boe-latest, rpi, il-ratios, hl-prices, or 'all' (default). "
+              "boe-latest, rpi, il-ratios, hl-prices, tradeweb, or 'all' "
+              "(default). "
               "Skipped components reuse their data from the existing "
               "gilt_yields.json if present. E.g. --only boe-latest,"
               "hl-prices for a fast daily refresh; --only dmo,boe-archive "
               "to skip the daily-only pieces."))
     args = parser.parse_args()
 
-    valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios", "hl-prices"}
+    valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios",
+             "hl-prices", "tradeweb"}
     components = valid if args.only == "all" else set(args.only.split(","))
     unknown = components - valid
     if unknown:
@@ -1393,6 +1543,22 @@ def main():
     else:
         print("\n=== Skipping HL daily prices (--only) ===")
 
+    # --- Tradeweb manual exports (covers index-linked gilts, which HL's
+    # page can't be scraped for -- see parse_tradeweb_csv) ---
+    if "tradeweb" in components:
+        print("\n=== Applying Tradeweb daily export(s) ===")
+        tradeweb_securities = build_tradeweb_securities()
+        if tradeweb_securities:
+            securities = merge_dmo_into_previous(tradeweb_securities, securities)
+            print(f"  merged Tradeweb data for {len(tradeweb_securities)} "
+                  f"securities onto the {len(securities)} already known -- "
+                  f"dates covered by the Tradeweb file(s) take priority")
+        else:
+            print(f"  no usable Tradeweb data found in {TRADEWEB_RAW_DIR} "
+                  f"-- leaving securities unchanged.")
+    else:
+        print("\n=== Skipping Tradeweb export(s) (--only) ===")
+
     output = {
         "generated": datetime.utcnow().isoformat() + "Z",
         "cutover_date": CUTOVER_DATE,
@@ -1427,13 +1593,16 @@ def main():
             "way, per DMO's published Reference Index formula (see "
             "igcalc.pdf) -- computed client-side, not by this script. "
             "Each security's most recent series point may come from "
-            "Hargreaves Lansdown's public daily gilt-price pages (no DMO/"
-            "Tradeweb equivalent exists post-cutover) rather than DMO -- "
-            "dirty_price is computed from HL's clean price plus accrued "
-            "interest (Actual/Actual, index-ratio-adjusted for linkers "
-            "using the DMO anchor above; the UK ex-dividend period isn't "
-            "modelled). yield is HL's gross YTM for conventional gilts, "
-            "null for linkers (HL doesn't publish one)."
+            "Hargreaves Lansdown's public daily gilt-price pages (dirty "
+            "price computed from HL's clean price plus accrued interest, "
+            "Actual/Actual, index-ratio-adjusted for linkers using the "
+            "DMO anchor above; UK ex-dividend period not modelled; yield "
+            "is HL's gross YTM for conventional gilts, null for linkers "
+            "since HL doesn't publish one there) or from a manually-"
+            "downloaded Tradeweb export in TRADEWEB_RAW_DIR (dirty price "
+            "and yield taken directly from Tradeweb, incl. for linkers -- "
+            "see parse_tradeweb_csv), whichever ran more recently for "
+            "that date."
         ),
         "securities": securities,
         "curves": curves,

@@ -6,10 +6,15 @@
 #     1pm once clocks go back to GMT in late October -- GitHub Actions
 #     cron has no timezone/DST awareness, so this drifts by an hour
 #     twice a year unless you adjust it) with `--only boe-latest,
-#     hl-prices`: BoE's daily-updated "latest yield curve data" file,
-#     plus a fresh security-level price for every current gilt from
-#     Hargreaves Lansdown's public price pages (dirty price computed
-#     from HL's clean price + accrued interest). Set for 2pm rather
+#     hl-prices,tradeweb`: BoE's daily-updated "latest yield curve data"
+#     file, a fresh security-level price for every current conventional
+#     gilt from Hargreaves Lansdown's public price pages (dirty price
+#     computed from HL's clean price + accrued interest -- HL's
+#     index-linked page can't be scraped, see fetch_gilt_data.py's
+#     docstring), and any Tradeweb export CSV(s) currently sitting in
+#     tradeweb_raw/ (covers linkers, and gives a second opinion on
+#     conventional gilts too -- harmless to re-parse the same file
+#     daily if nothing new has been dropped in). Set for 2pm rather
 #     than earlier because BoE aim to publish by noon UK time but
 #     don't always land right at noon, and to give HL's own prices
 #     time to reflect the day's trading.
@@ -29,6 +34,11 @@
 #   2. Commit the dmo_raw/ folder (your manually-downloaded DMO files)
 #      to the repo root -- these are static and only need committing
 #      once, this workflow just reuses them each run.
+#   3. Whenever you download a fresh Tradeweb export, drop the raw CSV
+#      (unmodified -- no renaming needed) into a tradeweb_raw/ folder
+#      at the repo root and commit/push it. The next run of this
+#      workflow (daily, or triggered manually) picks it up
+#      automatically.
 
 name: Update gilt yield data
 
@@ -39,7 +49,7 @@ on:
   workflow_dispatch:
     inputs:
       only:
-        description: "Components to run: dmo, boe-archive, boe-latest, rpi, il-ratios, hl-prices (comma-separated) or 'all'"
+        description: "Components to run: dmo, boe-archive, boe-latest, rpi, il-ratios, hl-prices, tradeweb (comma-separated) or 'all'"
         required: false
         default: 'all'
 
@@ -68,7 +78,7 @@ jobs:
           elif [ "${{ github.event.schedule }}" = "0 14 3 * *" ]; then
             ARGS="--only all"
           else
-            ARGS="--only boe-latest,hl-prices"
+            ARGS="--only boe-latest,hl-prices,tradeweb"
           fi
           echo "Running: python fetch_gilt_data.py $ARGS"
           python fetch_gilt_data.py $ARGS
