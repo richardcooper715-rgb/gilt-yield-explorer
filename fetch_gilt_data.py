@@ -423,6 +423,57 @@ def build_dmo_dataset():
     return list(securities.values())
 
 
+def merge_dmo_into_previous(dmo_securities, previous_securities):
+    """build_dmo_dataset() only knows about what's currently in dmo_raw/,
+    so used on its own it would wholesale REPLACE the securities list --
+    silently losing any dates that exist only because a later source
+    (e.g. HL's daily automated prices) added them and aren't also
+    present in a dmo_raw file. This merges instead: for each ISIN, the
+    freshly re-parsed dmo_raw dates take priority (so a new/corrected
+    Tradeweb or DMO file properly supersedes existing values for the
+    dates it covers), but every other date and every security not
+    touched by this dmo_raw pass is preserved from the previous run
+    rather than dropped.
+    """
+    prev_by_isin = {s["isin"]: s for s in previous_securities}
+    merged = []
+    seen_isins = set()
+
+    for dsec in dmo_securities:
+        isin = dsec["isin"]
+        seen_isins.add(isin)
+        prev = prev_by_isin.get(isin)
+        if prev is None:
+            merged.append(dsec)
+            continue
+        by_date = {p["date"]: p for p in prev.get("series", [])}
+        for p in dsec["series"]:
+            by_date[p["date"]] = p  # fresh dmo_raw data wins for this date
+        merged_sec = dict(prev)
+        merged_sec.update({
+            "name": dsec["name"],
+            "type": dsec["type"],
+            "redemption_date": dsec.get("redemption_date") or prev.get("redemption_date"),
+            "coupon_pct": (dsec.get("coupon_pct") if dsec.get("coupon_pct") is not None
+                           else prev.get("coupon_pct")),
+            "series": sorted(by_date.values(), key=lambda p: p["date"]),
+        })
+        earliest_dates = [d for d in
+                          (merged_sec["series"][0]["date"] if merged_sec["series"] else None,
+                           prev.get("first_price_date")) if d]
+        merged_sec["first_price_date"] = min(earliest_dates) if earliest_dates else None
+        merged.append(merged_sec)
+
+    # Securities the previous run knew about but this dmo_raw pass never
+    # touched at all (e.g. a gilt HL discovered that isn't in any
+    # dmo_raw file) -- keep them completely as-is.
+    for isin, prev in prev_by_isin.items():
+        if isin not in seen_isins:
+            merged.append(prev)
+
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # 2. BoE curve-level nominal / real yields (2017 - present)
 # ---------------------------------------------------------------------------
@@ -1239,7 +1290,16 @@ def main():
     # --- securities (DMO) ---
     if "dmo" in components:
         print("=== Building DMO per-security dataset (1996-2017) ===")
-        securities = build_dmo_dataset()
+        dmo_securities = build_dmo_dataset()
+        prev_securities = (previous or {}).get("securities", [])
+        if prev_securities:
+            securities = merge_dmo_into_previous(dmo_securities, prev_securities)
+            print(f"  merged onto {len(prev_securities)} previously-known "
+                  f"securities -- dates covered by the current dmo_raw "
+                  f"files take priority, everything else (e.g. HL-only "
+                  f"daily prices) is preserved")
+        else:
+            securities = dmo_securities
     else:
         securities = (previous or {}).get("securities", [])
         print(f"=== Skipping DMO (--only) -- reusing {len(securities)} "
