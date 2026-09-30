@@ -1090,10 +1090,15 @@ def parse_hl_gilt_table(html, is_index_linked):
 
     result = {}
     rows = table.find_all("tr")[1:]  # skip header row
+    rows_with_cells = 0
     for r in rows:
-        cells = r.find_all("td")
+        # Some tables mark the row-identifying cell (issuer, here) as
+        # <th scope="row"> rather than <td> -- accept either, unlike an
+        # td-only search which would silently misalign every column.
+        cells = r.find_all(["td", "th"])
         if not cells or idx_issuer is None or idx_issuer >= len(cells):
             continue
+        rows_with_cells += 1
         issuer_text = cells[idx_issuer].get_text(" ", strip=True)
         m = ISIN_RE.search(issuer_text)
         if not m:
@@ -1128,6 +1133,13 @@ def parse_hl_gilt_table(html, is_index_linked):
             "yield_pct": cell_num(idx_ytm0),
             "type": "index_linked" if is_index_linked else "conventional",
         }
+
+    if not result and rows_with_cells:
+        sample = rows[0].find_all(["td", "th"]) if rows else []
+        sample_texts = [c.get_text(strip=True) for c in sample]
+        print(f"  WARNING: found a table with {rows_with_cells} data row(s) "
+              f"(headers: {headers!r}, issuer column index {idx_issuer}) "
+              f"but extracted 0 gilts -- first row's cells: {sample_texts!r}")
     return result
 
 
