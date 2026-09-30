@@ -1047,99 +1047,108 @@ HL_INDEX_LINKED_URL = "https://www.hl.co.uk/shares/corporate-bonds-gilts/bond-pr
 ISIN_RE = re.compile(r"\bGB00[0-9A-Z]{7}\d\b")
 
 
-def _find_hl_table(soup):
-    """HL's page may contain more than one <table>; find the one that
-    looks like the gilt price table (has 'issuer' and 'coupon' headers)."""
-    for table in soup.find_all("table"):
-        header_cells = table.find("tr")
-        if not header_cells:
-            continue
-        headers = [c.get_text(strip=True).lower() for c in header_cells.find_all(["th", "td"])]
-        if any("issuer" in h for h in headers) and any("coupon" in h for h in headers):
-            return table, headers
-    return None, None
-
-
 def parse_hl_gilt_table(html, is_index_linked):
-    """Parse one HL bond-price page into {isin: {...}}. Returns {} (with a
-    printed diagnostic) if the page doesn't match the expected layout --
-    same defensive pattern used elsewhere in this script, since HL could
-    change their page structure at any time.
+    """Parse one HL bond-price page into {isin: {...}}. Returns {} if the
+    page doesn't match the expected layout. Whenever the result is empty,
+    ALWAYS prints one diagnostic line covering every stage (table found?
+    which one, out of how many candidates? headers? row/cell counts?
+    sample row content?) -- earlier versions of this diagnostic were
+    split across several separate conditional branches, any one of which
+    could individually fail to fire and leave a bare "parsed 0" with no
+    explanation at all, which is what actually happened in practice.
+    This version can't have that gap: everything funnels through one
+    unconditional check at the end.
     """
     soup = BeautifulSoup(html, "html.parser")
-    table, headers = _find_hl_table(soup)
-    if table is None:
-        all_tables = soup.find_all("table")
-        print(f"  WARNING: could not find a gilt price table on the HL "
-              f"page (found {len(all_tables)} <table> element(s), none "
-              f"with 'issuer'+'coupon' headers). Page title: "
-              f"{(soup.title.string.strip() if soup.title and soup.title.string else '?')!r}")
-        return {}
+    all_tables = soup.find_all("table")
+    candidates = []
+    for t in all_tables:
+        header_row = t.find("tr")
+        if not header_row:
+            continue
+        hdrs = [c.get_text(strip=True).lower() for c in header_row.find_all(["th", "td"])]
+        if any("issuer" in h for h in hdrs) and any("coupon" in h for h in hdrs):
+            candidates.append((t, hdrs))
+    table, headers = candidates[0] if candidates else (None, None)
 
-    def col(*keywords):
-        for i, h in enumerate(headers):
-            if all(k in h for k in keywords):
-                return i
-        return None
-
-    idx_issuer = col("issuer")
-    idx_coupon = col("coupon")
-    idx_maturity = col("maturity")
-    idx_price = col("price")
-    idx_ytm0 = col("ytm", "0")  # "YTM 0% tax" -- effectively the gross yield
-
-    result = {}
-    rows = table.find_all("tr")[1:]  # skip header row
+    idx_issuer = idx_coupon = idx_maturity = idx_price = idx_ytm0 = None
+    rows = []
     rows_with_cells = 0
-    for r in rows:
-        # Some tables mark the row-identifying cell (issuer, here) as
-        # <th scope="row"> rather than <td> -- accept either, unlike an
-        # td-only search which would silently misalign every column.
-        cells = r.find_all(["td", "th"])
-        if not cells or idx_issuer is None or idx_issuer >= len(cells):
-            continue
-        rows_with_cells += 1
-        issuer_text = cells[idx_issuer].get_text(" ", strip=True)
-        m = ISIN_RE.search(issuer_text)
-        if not m:
-            continue
-        isin = m.group(0)
+    result = {}
 
-        def cell_num(idx):
-            if idx is None or idx >= len(cells):
-                return None
-            txt = cells[idx].get_text(strip=True).replace(",", "")
-            try:
-                return float(txt)
-            except ValueError:
-                return None
+    if table is not None:
+        def col(*keywords):
+            for i, h in enumerate(headers):
+                if all(k in h for k in keywords):
+                    return i
+            return None
 
-        price = cell_num(idx_price)
-        if price is None:
-            continue
-        coupon_pct = cell_num(idx_coupon)
-        maturity_date = None
-        if idx_maturity is not None and idx_maturity < len(cells):
-            md = pd.to_datetime(cells[idx_maturity].get_text(strip=True),
-                                 errors="coerce", dayfirst=True)
-            if md is not None and not pd.isna(md):
-                maturity_date = md.strftime("%Y-%m-%d")
+        idx_issuer = col("issuer")
+        idx_coupon = col("coupon")
+        idx_maturity = col("maturity")
+        idx_price = col("price")
+        idx_ytm0 = col("ytm", "0")  # "YTM 0% tax" -- effectively the gross yield
 
-        result[isin] = {
-            "name": cells[idx_issuer].get_text(" ", strip=True).split(" GBP")[0].strip(),
-            "coupon_pct": coupon_pct,
-            "maturity_date": maturity_date,
-            "clean_price": price,
-            "yield_pct": cell_num(idx_ytm0),
-            "type": "index_linked" if is_index_linked else "conventional",
-        }
+        rows = table.find_all("tr")[1:]  # skip header row
+        for r in rows:
+            # Some tables mark the row-identifying cell (issuer, here) as
+            # <th scope="row"> rather than <td> -- accept either, unlike
+            # a td-only search which would silently misalign every column.
+            cells = r.find_all(["td", "th"])
+            if not cells or idx_issuer is None or idx_issuer >= len(cells):
+                continue
+            rows_with_cells += 1
+            issuer_text = cells[idx_issuer].get_text(" ", strip=True)
+            m = ISIN_RE.search(issuer_text)
+            if not m:
+                continue
+            isin = m.group(0)
 
-    if not result and rows_with_cells:
-        sample = rows[0].find_all(["td", "th"]) if rows else []
-        sample_texts = [c.get_text(strip=True) for c in sample]
-        print(f"  WARNING: found a table with {rows_with_cells} data row(s) "
-              f"(headers: {headers!r}, issuer column index {idx_issuer}) "
-              f"but extracted 0 gilts -- first row's cells: {sample_texts!r}")
+            def cell_num(idx):
+                if idx is None or idx >= len(cells):
+                    return None
+                txt = cells[idx].get_text(strip=True).replace(",", "")
+                try:
+                    return float(txt)
+                except ValueError:
+                    return None
+
+            price = cell_num(idx_price)
+            if price is None:
+                continue
+            coupon_pct = cell_num(idx_coupon)
+            maturity_date = None
+            if idx_maturity is not None and idx_maturity < len(cells):
+                md = pd.to_datetime(cells[idx_maturity].get_text(strip=True),
+                                     errors="coerce", dayfirst=True)
+                if md is not None and not pd.isna(md):
+                    maturity_date = md.strftime("%Y-%m-%d")
+
+            result[isin] = {
+                "name": cells[idx_issuer].get_text(" ", strip=True).split(" GBP")[0].strip(),
+                "coupon_pct": coupon_pct,
+                "maturity_date": maturity_date,
+                "clean_price": price,
+                "yield_pct": cell_num(idx_ytm0),
+                "type": "index_linked" if is_index_linked else "conventional",
+            }
+
+    if not result:
+        page_title = (soup.title.string.strip()
+                       if soup.title and soup.title.string else "?")
+        sample_texts = None
+        if rows:
+            sample = rows[0].find_all(["td", "th"])
+            sample_texts = [c.get_text(strip=True) for c in sample]
+        print(f"  WARNING: extracted 0 gilts from this page. Page title: "
+              f"{page_title!r}. <table> elements on page: {len(all_tables)}, "
+              f"matching 'issuer'+'coupon' headers: {len(candidates)}. "
+              f"{'Using the first match.' if candidates else 'No match at all.'} "
+              f"Headers used: {headers!r}. Column indices -- issuer: "
+              f"{idx_issuer}, coupon: {idx_coupon}, maturity: {idx_maturity}, "
+              f"price: {idx_price}, ytm0: {idx_ytm0}. Data <tr> rows: "
+              f"{len(rows)}, rows with a usable issuer cell: {rows_with_cells}. "
+              f"First row's cells: {sample_texts!r}.")
     return result
 
 
