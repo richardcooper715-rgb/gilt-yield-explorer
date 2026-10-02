@@ -1484,7 +1484,13 @@ def main():
     if "boe-archive" in components:
         print("\n=== Building BoE archive curve dataset "
               "(nominal, real, inflation -- spot + forward) ===")
-        curves = build_boe_dataset()
+        fresh_archive = build_boe_dataset()
+        prev_curves = (previous or {}).get("curves", empty_curves)
+        curves = merge_curve_overlay(prev_curves, fresh_archive)
+        print(f"  merged onto previously-accumulated curve data -- fresh "
+              f"archive data takes priority for the dates it covers, but "
+              f"daily points added by boe-latest runs since the last "
+              f"archive refresh are preserved rather than wiped")
     else:
         curves = (previous or {}).get("curves", empty_curves)
         counts = ", ".join(

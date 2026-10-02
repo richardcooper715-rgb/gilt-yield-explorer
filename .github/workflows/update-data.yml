@@ -92,5 +92,6 @@ jobs:
           else
             git add gilt_yields.json
             git commit -m "Auto-update gilt yield data ($(date -u +%Y-%m-%d))"
+            git pull --rebase origin main
             git push
           fi
