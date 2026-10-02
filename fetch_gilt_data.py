@@ -1403,23 +1403,25 @@ def build_tradeweb_securities():
         all_rows.extend(parse_tradeweb_csv(path))
 
     securities = {}
+    by_date = {}  # isin -> {date -> point}; dedupes if two files cover the
+                  # same security on the same date (e.g. old exports left
+                  # in the folder rather than deleted -- harmless either way)
     for row in all_rows:
-        sec = securities.setdefault(row["isin"], {
+        securities.setdefault(row["isin"], {
             "isin": row["isin"],
             "name": row["name"],
             "type": row["type"],
             "redemption_date": row["redemption_date"],
             "coupon_pct": row["coupon_pct"],
-            "series": [],
         })
-        sec["series"].append({
+        by_date.setdefault(row["isin"], {})[row["date"]] = {
             "date": row["date"],
             "yield": row["yield"],
             "dirty_price": row["dirty_price"],
-        })
+        }
 
-    for sec in securities.values():
-        sec["series"].sort(key=lambda p: p["date"])
+    for isin, sec in securities.items():
+        sec["series"] = sorted(by_date[isin].values(), key=lambda p: p["date"])
 
     return list(securities.values())
 
