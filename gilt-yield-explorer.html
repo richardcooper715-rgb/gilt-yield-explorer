@@ -179,6 +179,7 @@
     padding:8px 10px; text-align:right; border-bottom:1px solid var(--line);
   }
   .summary-table th:first-child, .summary-table td:first-child{ text-align:left; }
+  .summary-table .col-sublabel{ text-align:right; }
   .summary-table thead th{
     font-size:11px; text-transform:uppercase; letter-spacing:0.4px;
     color:var(--ink-soft); font-weight:600; border-bottom:1px solid var(--ink);
@@ -1949,16 +1950,20 @@ function renderPortfolioBreakdown(){
   const totalFor = (metric, sub) =>
     sub==='total' ? totals[metric].fixed + totals[metric].il : totals[metric][sub];
 
-  const bodyRows = metrics.map(m => subs.map((s,i) => {
-    const rowTotal = totalFor(m.key, s.key);
-    const cells = rows.map(r => {
-      const v = valueFor(r, m.key, s.key);
-      return `<td>${fmt(v)}${pct(v, rowTotal)}</td>`;
+  const bodyRows = metrics.map(m => {
+    const metricGrandTotal = totalFor(m.key, 'total');
+    return subs.map((s,i) => {
+      const rowTotal = totalFor(m.key, s.key);
+      const cells = rows.map(r => {
+        const v = valueFor(r, m.key, s.key);
+        return `<td>${fmt(v)}${pct(v, rowTotal)}</td>`;
+      }).join('');
+      const metricCell = i===0 ? `<td rowspan="3">${m.label}</td>` : '';
+      const rowCls = s.key==='total' ? ' style="font-weight:600;border-top:1px solid var(--line);"' : '';
+      return `<tr${rowCls}>${metricCell}<td class="col-sublabel">${s.label}</td>${cells}`+
+        `<td>${fmt(rowTotal)}${pct(rowTotal, metricGrandTotal)}</td></tr>`;
     }).join('');
-    const metricCell = i===0 ? `<td rowspan="3">${m.label}</td>` : '';
-    const rowCls = s.key==='total' ? ' style="font-weight:600;border-top:1px solid var(--line);"' : '';
-    return `<tr${rowCls}>${metricCell}<td>${s.label}</td>${cells}<td>${fmt(rowTotal)}</td></tr>`;
-  }).join('')).join('');
+  }).join('');
 
   const bandHeaders = rows.map(r=>`<th>${r.label}</th>`).join('');
 
