@@ -174,6 +174,22 @@
   .portfolio-row .row-label{ font-size:11px; color:var(--ink-soft); white-space:nowrap; }
   .portfolio-empty{ font-size:12.5px; color:var(--ink-soft); padding:6px 0; }
   .portfolio-note{ font-size:11px; color:var(--ink-soft); margin-top:8px; line-height:1.5; }
+  .summary-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .summary-table th, .summary-table td{
+    padding:8px 10px; text-align:right; border-bottom:1px solid var(--line);
+  }
+  .summary-table th:first-child, .summary-table td:first-child{ text-align:left; }
+  .summary-table thead th{
+    font-size:11px; text-transform:uppercase; letter-spacing:0.4px;
+    color:var(--ink-soft); font-weight:600; border-bottom:1px solid var(--ink);
+  }
+  .summary-table tbody tr:hover{ background:var(--hover); }
+  .summary-table tfoot td{
+    font-weight:600; border-top:1.5px solid var(--ink); border-bottom:none;
+  }
+  .summary-table .col-group-nominal{ color:var(--nominal); }
+  .summary-table .col-group-real{ color:var(--real); }
+  .summary-pct{ font-size:10.5px; color:var(--ink-soft); font-weight:400; }
   .chart-wrap{
     background:var(--paper-panel);
     border:1px solid var(--line);
@@ -235,6 +251,7 @@
         <button class="view-tab" data-view="steepness">Curve Steepness</button>
         <button class="view-tab" data-view="portfolio">Portfolio</button>
         <button class="view-tab" data-view="portfolio-cashflows">Portfolio Cashflows</button>
+        <button class="view-tab" data-view="portfolio-summary">Portfolio Summary</button>
       </div>
 
       <div class="controls" id="controls-timeseries">
@@ -375,6 +392,13 @@
           Reference Index formula against known RPI history, then the BoE implied-inflation (BEI) curve to
           project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.
           Switch to the Portfolio Cashflows tab to see the projected chart.</div>
+      </div>
+
+      <div id="portfolio-breakdown" style="display:none;">
+        <div id="portfolio-breakdown-table"></div>
+        <div class="portfolio-note">Value uses each holding's latest available price. Cashflow totals sum every
+          projected payment from today to redemption (real terms deflated using the current BEI curve, same
+          basis as the Portfolio Cashflows chart) -- not a running balance, and not discounted to a present value.</div>
       </div>
 
       <div class="chart-wrap" id="chart-wrap">
@@ -992,7 +1016,9 @@ document.querySelectorAll('.view-tab').forEach(btn=>{
     });
     document.getElementById('portfolio-editor').style.display = (state.view==='portfolio') ? 'block' : 'none';
     if(state.view!=='portfolio') document.getElementById('paste-portfolio-panel').style.display = 'none';
-    document.getElementById('chart-wrap').style.display = (state.view==='portfolio') ? 'none' : 'block';
+    document.getElementById('portfolio-breakdown').style.display = (state.view==='portfolio-summary') ? 'block' : 'none';
+    document.getElementById('chart-wrap').style.display =
+      (state.view==='portfolio' || state.view==='portfolio-summary') ? 'none' : 'block';
     render();
   });
 });
@@ -1066,6 +1092,13 @@ function securityOptionsHtml(selectedIsin){
   ).join('');
 }
 
+function latestDirtyPrice(sec){
+  for(let i=sec.series.length-1; i>=0; i--){
+    if(sec.series[i].dirty_price!=null) return sec.series[i].dirty_price;
+  }
+  return null;
+}
+
 function computePortfolioSummary(){
   let totalNominal = 0, totalValue = 0, missingPriceCount = 0;
   state.portfolio.forEach(({isin, units})=>{
@@ -1073,10 +1106,7 @@ function computePortfolioSummary(){
     totalNominal += units;
     const sec = state.data.securities.find(s=>s.isin===isin);
     if(!sec) return;
-    let latestPrice = null;
-    for(let i=sec.series.length-1; i>=0; i--){
-      if(sec.series[i].dirty_price!=null){ latestPrice = sec.series[i].dirty_price; break; }
-    }
+    const latestPrice = latestDirtyPrice(sec);
     if(latestPrice!=null) totalValue += (units/100) * latestPrice;
     else missingPriceCount++;
   });
@@ -1225,6 +1255,7 @@ function render(){
   else if(state.view==='change') renderCurveChange();
   else if(state.view==='steepness') renderSteepness();
   else if(state.view==='portfolio-cashflows') renderPortfolioChart();
+  else if(state.view==='portfolio-summary') renderPortfolioBreakdown();
 }
 
 function periodCutoffMonths(elId){
@@ -1838,6 +1869,89 @@ function renderPortfolioChart(){
     agg.diagnostics.map(d=>
     `<span class="legend-item" style="color:var(--cutover)">${d.name}: ${d.reason}</span>`
   ).join('') + `<span class="legend-item">Showing ${terms==='real' ? "real (today's money)" : 'nominal (actual £ received)'} terms — hover a bar for the breakdown</span>`;
+}
+
+function renderPortfolioBreakdown(){
+  const container = document.getElementById('portfolio-breakdown-table');
+  const held = state.portfolio.filter(r=>r.isin && r.units);
+  if(!held.length){
+    container.innerHTML = '<div class="portfolio-empty">Add holdings on the Portfolio tab to see a summary here.</div>';
+    return;
+  }
+
+  const today = new Date().toISOString().slice(0,10);
+
+  // nominal + value per band, from the portfolio directly
+  const bands = new Map(); // key -> {label, order, nominal, value, missingPrice, cfNominal, cfReal}
+  const bandFor = sec => maturityBucket(sec, today);
+  let missingPriceCount = 0;
+
+  held.forEach(({isin, units})=>{
+    const sec = state.data.securities.find(s=>s.isin===isin);
+    if(!sec) return;
+    const b = bandFor(sec);
+    const row = bands.get(b.key) || {label:b.label, order:b.order, nominal:0, value:0, cfNominal:0, cfReal:0};
+    row.nominal += units;
+    const price = latestDirtyPrice(sec);
+    if(price!=null) row.value += (units/100)*price;
+    else missingPriceCount++;
+    bands.set(b.key, row);
+  });
+
+  // total cashflows per band, nominal and real terms (sum across all years --
+  // not a running balance, not present-valued, see the note under the table)
+  const aggN = aggregatePortfolioCashflows('nominal');
+  const aggR = aggregatePortfolioCashflows('real');
+  const addCashflows = (agg, field) => {
+    agg.bySecurity.forEach(bsec=>{
+      const sec = state.data.securities.find(s=>s.isin===bsec.isin);
+      if(!sec) return;
+      const b = bandFor(sec);
+      const row = bands.get(b.key) || {label:b.label, order:b.order, nominal:0, value:0, cfNominal:0, cfReal:0};
+      let total = 0;
+      bsec.byYear.forEach(v=>{ total += v; });
+      row[field] += total;
+      bands.set(b.key, row);
+    });
+  };
+  addCashflows(aggN, 'cfNominal');
+  addCashflows(aggR, 'cfReal');
+
+  const rows = [...bands.values()].sort((a,b)=>a.order-b.order);
+  const totals = rows.reduce((t,r)=>({
+    nominal:t.nominal+r.nominal, value:t.value+r.value,
+    cfNominal:t.cfNominal+r.cfNominal, cfReal:t.cfReal+r.cfReal
+  }), {nominal:0, value:0, cfNominal:0, cfReal:0});
+
+  const fmt = v => '£'+v.toLocaleString(undefined,{maximumFractionDigits:0});
+  const pct = (v,t) => t>0 ? `<div class="summary-pct">${(v/t*100).toFixed(0)}%</div>` : '';
+
+  const bodyRows = rows.map(r => `
+    <tr>
+      <td>${r.label}</td>
+      <td>${fmt(r.nominal)}${pct(r.nominal, totals.nominal)}</td>
+      <td>${fmt(r.value)}${pct(r.value, totals.value)}</td>
+      <td class="col-group-nominal">${fmt(r.cfNominal)}</td>
+      <td class="col-group-real">${fmt(r.cfReal)}</td>
+    </tr>`).join('');
+
+  container.innerHTML = `
+    <table class="summary-table">
+      <thead><tr>
+        <th>Maturity band</th><th>Nominal</th><th>Value</th>
+        <th class="col-group-nominal">Cashflows (nominal)</th>
+        <th class="col-group-real">Cashflows (real)</th>
+      </tr></thead>
+      <tbody>${bodyRows}</tbody>
+      <tfoot><tr>
+        <td>Total</td><td>${fmt(totals.nominal)}</td><td>${fmt(totals.value)}</td>
+        <td class="col-group-nominal">${fmt(totals.cfNominal)}</td>
+        <td class="col-group-real">${fmt(totals.cfReal)}</td>
+      </tr></tfoot>
+    </table>` +
+    (missingPriceCount ? `<div class="portfolio-note">${missingPriceCount} holding(s) missing a price -- excluded from Value only.</div>` : '') +
+    (aggN.diagnostics.length ? `<div class="portfolio-note" style="color:var(--cutover)">` +
+      aggN.diagnostics.map(d=>`${d.name}: ${d.reason}`).join('<br>') + `</div>` : '');
 }
 
 loadData();
