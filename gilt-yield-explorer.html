@@ -396,9 +396,9 @@
 
       <div id="portfolio-breakdown" style="display:none;">
         <div id="portfolio-breakdown-table"></div>
-        <div class="portfolio-note">Value uses each holding's latest available price. Cashflow totals sum every
-          projected payment from today to redemption (real terms deflated using the current BEI curve, same
-          basis as the Portfolio Cashflows chart) -- not a running balance, and not discounted to a present value.</div>
+        <div class="portfolio-note">Value uses each holding's latest available price. Cashflow totals (nominal
+          terms -- actual £ you'd receive) sum every projected payment from today to redemption -- not a running
+          balance, and not discounted to a present value.</div>
       </div>
 
       <div class="chart-wrap" id="chart-wrap">
@@ -1880,75 +1880,90 @@ function renderPortfolioBreakdown(){
   }
 
   const today = new Date().toISOString().slice(0,10);
-
-  // nominal + value per band, from the portfolio directly
-  const bands = new Map(); // key -> {label, order, nominal, value, missingPrice, cfNominal, cfReal}
   const bandFor = sec => maturityBucket(sec, today);
-  let missingPriceCount = 0;
+  const emptySplit = () => ({fixed:0, il:0});
 
+  // key -> {label, order, nominal:{fixed,il}, value:{fixed,il}, cf:{fixed,il}}
+  const bands = new Map();
+  const getRow = (key, label, order) => {
+    if(!bands.has(key)) bands.set(key, {label, order,
+      nominal:emptySplit(), value:emptySplit(), cf:emptySplit()});
+    return bands.get(key);
+  };
+  const bucketKey = sec => sec.type==='index_linked' ? 'il' : 'fixed';
+
+  let missingPriceCount = 0;
   held.forEach(({isin, units})=>{
     const sec = state.data.securities.find(s=>s.isin===isin);
     if(!sec) return;
     const b = bandFor(sec);
-    const row = bands.get(b.key) || {label:b.label, order:b.order, nominal:0, value:0, cfNominal:0, cfReal:0};
-    row.nominal += units;
+    const row = getRow(b.key, b.label, b.order);
+    const k = bucketKey(sec);
+    row.nominal[k] += units;
     const price = latestDirtyPrice(sec);
-    if(price!=null) row.value += (units/100)*price;
+    if(price!=null) row.value[k] += (units/100)*price;
     else missingPriceCount++;
-    bands.set(b.key, row);
   });
 
-  // total cashflows per band, nominal and real terms (sum across all years --
-  // not a running balance, not present-valued, see the note under the table)
+  // Total cashflows per band, nominal terms, sum across all years -- not a
+  // running balance, not present-valued, see the note under the table.
   const aggN = aggregatePortfolioCashflows('nominal');
-  const aggR = aggregatePortfolioCashflows('real');
-  const addCashflows = (agg, field) => {
-    agg.bySecurity.forEach(bsec=>{
-      const sec = state.data.securities.find(s=>s.isin===bsec.isin);
-      if(!sec) return;
-      const b = bandFor(sec);
-      const row = bands.get(b.key) || {label:b.label, order:b.order, nominal:0, value:0, cfNominal:0, cfReal:0};
-      let total = 0;
-      bsec.byYear.forEach(v=>{ total += v; });
-      row[field] += total;
-      bands.set(b.key, row);
-    });
-  };
-  addCashflows(aggN, 'cfNominal');
-  addCashflows(aggR, 'cfReal');
+  aggN.bySecurity.forEach(bsec=>{
+    const sec = state.data.securities.find(s=>s.isin===bsec.isin);
+    if(!sec) return;
+    const b = bandFor(sec);
+    const row = getRow(b.key, b.label, b.order);
+    let total = 0;
+    bsec.byYear.forEach(v=>{ total += v; });
+    row.cf[bucketKey(sec)] += total;
+  });
 
   const rows = [...bands.values()].sort((a,b)=>a.order-b.order);
-  const totals = rows.reduce((t,r)=>({
-    nominal:t.nominal+r.nominal, value:t.value+r.value,
-    cfNominal:t.cfNominal+r.cfNominal, cfReal:t.cfReal+r.cfReal
-  }), {nominal:0, value:0, cfNominal:0, cfReal:0});
+  const totals = {nominal:emptySplit(), value:emptySplit(), cf:emptySplit()};
+  rows.forEach(r=>{
+    ['nominal','value','cf'].forEach(m=>{
+      totals[m].fixed += r[m].fixed;
+      totals[m].il += r[m].il;
+    });
+  });
 
   const fmt = v => '£'+v.toLocaleString(undefined,{maximumFractionDigits:0});
-  const pct = (v,t) => t>0 ? `<div class="summary-pct">${(v/t*100).toFixed(0)}%</div>` : '';
 
   const bodyRows = rows.map(r => `
     <tr>
       <td>${r.label}</td>
-      <td>${fmt(r.nominal)}${pct(r.nominal, totals.nominal)}</td>
-      <td>${fmt(r.value)}${pct(r.value, totals.value)}</td>
-      <td class="col-group-nominal">${fmt(r.cfNominal)}</td>
-      <td class="col-group-real">${fmt(r.cfReal)}</td>
+      <td>${fmt(r.nominal.fixed)}</td><td>${fmt(r.nominal.il)}</td>
+      <td>${fmt(r.value.fixed)}</td><td>${fmt(r.value.il)}</td>
+      <td class="col-group-nominal">${fmt(r.cf.fixed)}</td>
+      <td class="col-group-real">${fmt(r.cf.il)}</td>
     </tr>`).join('');
 
   container.innerHTML = `
+    <div style="overflow-x:auto;">
     <table class="summary-table">
-      <thead><tr>
-        <th>Maturity band</th><th>Nominal</th><th>Value</th>
-        <th class="col-group-nominal">Cashflows (nominal)</th>
-        <th class="col-group-real">Cashflows (real)</th>
-      </tr></thead>
+      <thead>
+        <tr>
+          <th rowspan="2">Maturity band</th>
+          <th colspan="2">Nominal</th>
+          <th colspan="2">Value</th>
+          <th colspan="2">Cashflows (nominal terms)</th>
+        </tr>
+        <tr>
+          <th>Fixed</th><th>Index-linked</th>
+          <th>Fixed</th><th>Index-linked</th>
+          <th class="col-group-nominal">Fixed</th><th class="col-group-real">Index-linked</th>
+        </tr>
+      </thead>
       <tbody>${bodyRows}</tbody>
       <tfoot><tr>
-        <td>Total</td><td>${fmt(totals.nominal)}</td><td>${fmt(totals.value)}</td>
-        <td class="col-group-nominal">${fmt(totals.cfNominal)}</td>
-        <td class="col-group-real">${fmt(totals.cfReal)}</td>
+        <td>Total</td>
+        <td>${fmt(totals.nominal.fixed)}</td><td>${fmt(totals.nominal.il)}</td>
+        <td>${fmt(totals.value.fixed)}</td><td>${fmt(totals.value.il)}</td>
+        <td class="col-group-nominal">${fmt(totals.cf.fixed)}</td>
+        <td class="col-group-real">${fmt(totals.cf.il)}</td>
       </tr></tfoot>
-    </table>` +
+    </table>
+    </div>` +
     (missingPriceCount ? `<div class="portfolio-note">${missingPriceCount} holding(s) missing a price -- excluded from Value only.</div>` : '') +
     (aggN.diagnostics.length ? `<div class="portfolio-note" style="color:var(--cutover)">` +
       aggN.diagnostics.map(d=>`${d.name}: ${d.reason}`).join('<br>') + `</div>` : '');
