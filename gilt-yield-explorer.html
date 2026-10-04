@@ -1928,40 +1928,47 @@ function renderPortfolioBreakdown(){
   });
 
   const fmt = v => '£'+v.toLocaleString(undefined,{maximumFractionDigits:0});
+  const pct = (v,t) => t>0 ? `<div class="summary-pct">${(v/t*100).toFixed(0)}%</div>` : '';
 
-  const bodyRows = rows.map(r => `
-    <tr>
-      <td>${r.label}</td>
-      <td>${fmt(r.nominal.fixed)}</td><td>${fmt(r.nominal.il)}</td>
-      <td>${fmt(r.value.fixed)}</td><td>${fmt(r.value.il)}</td>
-      <td class="col-group-nominal">${fmt(r.cf.fixed)}</td>
-      <td class="col-group-real">${fmt(r.cf.il)}</td>
-    </tr>`).join('');
+  // Characteristics as rows, maturity bands as columns, a Total sub-row
+  // per metric (fixed+index-linked combined), and a Total column
+  // (summed across bands) -- there are more characteristics (9) than
+  // bands, so this reads better than the other way round.
+  const metrics = [
+    {key:'nominal', label:'Nominal'},
+    {key:'value', label:'Value'},
+    {key:'cf', label:'Cashflows (nominal terms)'},
+  ];
+  const subs = [
+    {key:'fixed', label:'Fixed', cls:''},
+    {key:'il', label:'Index-linked', cls:''},
+    {key:'total', label:'Total', cls:''},
+  ];
+  const valueFor = (r, metric, sub) =>
+    sub==='total' ? r[metric].fixed + r[metric].il : r[metric][sub];
+  const totalFor = (metric, sub) =>
+    sub==='total' ? totals[metric].fixed + totals[metric].il : totals[metric][sub];
+
+  const bodyRows = metrics.map(m => subs.map((s,i) => {
+    const rowTotal = totalFor(m.key, s.key);
+    const cells = rows.map(r => {
+      const v = valueFor(r, m.key, s.key);
+      return `<td>${fmt(v)}${pct(v, rowTotal)}</td>`;
+    }).join('');
+    const metricCell = i===0 ? `<td rowspan="3">${m.label}</td>` : '';
+    const rowCls = s.key==='total' ? ' style="font-weight:600;border-top:1px solid var(--line);"' : '';
+    return `<tr${rowCls}>${metricCell}<td>${s.label}</td>${cells}<td>${fmt(rowTotal)}</td></tr>`;
+  }).join('')).join('');
+
+  const bandHeaders = rows.map(r=>`<th>${r.label}</th>`).join('');
 
   container.innerHTML = `
     <div style="overflow-x:auto;">
     <table class="summary-table">
-      <thead>
-        <tr>
-          <th rowspan="2">Maturity band</th>
-          <th colspan="2">Nominal</th>
-          <th colspan="2">Value</th>
-          <th colspan="2">Cashflows (nominal terms)</th>
-        </tr>
-        <tr>
-          <th>Fixed</th><th>Index-linked</th>
-          <th>Fixed</th><th>Index-linked</th>
-          <th class="col-group-nominal">Fixed</th><th class="col-group-real">Index-linked</th>
-        </tr>
-      </thead>
+      <thead><tr>
+        <th>Characteristic</th><th></th>${bandHeaders}<th>Total</th>
+      </tr></thead>
       <tbody>${bodyRows}</tbody>
-      <tfoot><tr>
-        <td>Total</td>
-        <td>${fmt(totals.nominal.fixed)}</td><td>${fmt(totals.nominal.il)}</td>
-        <td>${fmt(totals.value.fixed)}</td><td>${fmt(totals.value.il)}</td>
-        <td class="col-group-nominal">${fmt(totals.cf.fixed)}</td>
-        <td class="col-group-real">${fmt(totals.cf.il)}</td>
-      </tr></tfoot>
     </table>
     </div>` +
     (missingPriceCount ? `<div class="portfolio-note">${missingPriceCount} holding(s) missing a price -- excluded from Value only.</div>` : '') +
