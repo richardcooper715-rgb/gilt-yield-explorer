@@ -52,6 +52,10 @@ on:
         description: "Components to run: dmo, boe-archive, boe-latest, rpi, il-ratios, hl-prices, tradeweb (comma-separated) or 'all'"
         required: false
         default: 'all'
+      purge_dates:
+        description: "One-off clean-up: comma-separated YYYY-MM-DD dates to delete from every security (leave blank normally)"
+        required: false
+        default: ''
 
 permissions:
   contents: write   # needed so the workflow can push the updated file
@@ -75,6 +79,9 @@ jobs:
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
             ARGS="--only ${{ github.event.inputs.only }}"
+            if [ -n "${{ github.event.inputs.purge_dates }}" ]; then
+              ARGS="$ARGS --purge-dates ${{ github.event.inputs.purge_dates }}"
+            fi
           elif [ "${{ github.event.schedule }}" = "0 14 3 * *" ]; then
             ARGS="--only all"
           else

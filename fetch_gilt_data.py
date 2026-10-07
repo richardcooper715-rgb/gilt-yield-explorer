@@ -138,7 +138,8 @@ import os
 import re
 import zipfile
 import calendar
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
+import math
 
 import requests
 from bs4 import BeautifulSoup
@@ -1217,35 +1218,129 @@ def _coupon_window(redemption_date_str, today):
     return d, _add_months(d, 6)
 
 
-def compute_dirty_price(clean_price, coupon_pct, redemption_date_str, today,
+def _next_business_day(d):
+    d += timedelta(days=1)
+    while d.weekday() >= 5:
+        d += timedelta(days=1)
+    return d
+
+
+def _business_days_before(d, n):
+    while n > 0:
+        d -= timedelta(days=1)
+        if d.weekday() < 5:
+            n -= 1
+    return d
+
+
+def compute_dirty_price(clean_price, coupon_pct, redemption_date_str, trade_date,
                          index_ratio=None):
-    """Dirty price = clean price + accrued interest, using the standard
-    Actual/Actual semi-annual convention. `index_ratio` (if given)
-    inflation-adjusts the accrued interest for index-linked gilts, using
-    the closest thing we have -- the DMO-anchored index ratio -- rather
-    than a full Reference Index recomputation, which is a reasonable
-    approximation given how small accrued interest is relative to price.
-    Does NOT model the UK ex-dividend period (a further, smaller
-    simplification, consistent with the rest of this app's approach to
-    index-linked gilts).
+    """Dirty price = clean price + accrued interest.
+
+    - Settlement is the next business day after `trade_date` (T+1), which
+      matches how Tradeweb's own dirty prices reconcile.
+    - Accrued uses the Actual/Actual semi-annual convention, and goes
+      NEGATIVE during the ex-dividend period (from 7 business days before
+      the coupon date), as per the DMO convention.
+    - For INDEX-LINKED gilts the quoted clean price and the coupon are in
+      REAL terms, so the whole thing is scaled to cash terms:
+          dirty = (real clean + real accrued) x index ratio
+      `index_ratio` must then be the ratio at the settlement date.
+      Pass index_ratio=None for conventional gilts.
+    Returns None if clean_price is missing.
     """
-    if clean_price is None or coupon_pct is None or not redemption_date_str:
+    if clean_price is None:
+        return None
+    if coupon_pct is None or not redemption_date_str:
         return clean_price
-    window = _coupon_window(redemption_date_str, today)
+    settle = _next_business_day(trade_date)
+    window = _coupon_window(redemption_date_str, settle)
     if window is None:
-        return clean_price  # matured -- no accrual to add
-    last_coupon, next_coupon = window
-    days_since = (today - last_coupon).days
-    days_in_period = (next_coupon - last_coupon).days
-    if days_in_period <= 0:
-        return clean_price
-    ai = (coupon_pct / 2) * (days_since / days_in_period)
+        ai = 0.0   # matured -- no accrual
+    else:
+        last_coupon, next_coupon = window
+        days_in_period = (next_coupon - last_coupon).days
+        if days_in_period <= 0:
+            ai = 0.0
+        elif settle >= _business_days_before(next_coupon, 7):
+            ai = -(coupon_pct / 2) * ((next_coupon - settle).days / days_in_period)
+        else:
+            ai = (coupon_pct / 2) * ((settle - last_coupon).days / days_in_period)
+    dirty = clean_price + ai
     if index_ratio:
-        ai *= index_ratio
-    return round(clean_price + ai, 4)
+        dirty *= index_ratio
+    return round(dirty, 4)
 
 
-def apply_hl_prices(securities, hl_data, il_index_ratio_anchors):
+# --- index ratio roll-forward (Python mirror of the app's indexRatioForDate) ---
+
+def _interp_rate(points, t):
+    if not points:
+        return None
+    if t <= points[0][0]:
+        return points[0][1]
+    if t >= points[-1][0]:
+        return points[-1][1]
+    for (t1, r1), (t2, r2) in zip(points, points[1:]):
+        if t1 <= t <= t2:
+            return r1 + (t - t1) / (t2 - t1) * (r2 - r1)
+    return points[-1][1]
+
+
+def build_index_context(rpi_history, curves):
+    rpi_map = {r["month"]: r["rpi"] for r in (rpi_history or [])}
+    last = (rpi_history or [None])[-1] if rpi_history else None
+    infl = ((curves or {}).get("inflation") or {}).get("spot") or []
+    bei = []
+    if infl:
+        latest = max(r["date"] for r in infl)
+        bei = sorted((r["maturity_years"], r["rate_pct"])
+                     for r in infl if r["date"] == latest)
+    return {"rpi_map": rpi_map, "last": last, "bei": bei}
+
+
+def _rpi_for_month(month_str, ctx):
+    if month_str in ctx["rpi_map"]:
+        return ctx["rpi_map"][month_str]
+    last = ctx["last"]
+    if not last or not ctx["bei"]:
+        return None
+    yrs = (date.fromisoformat(month_str) - date.fromisoformat(last["month"])).days / 365.25
+    if yrs <= 0:
+        return last["rpi"]
+    bei = _interp_rate(ctx["bei"], yrs)
+    return last["rpi"] * math.exp(bei / 100 * yrs)
+
+
+def _reference_index(d, lag, ctx):
+    m0 = date(d.year, d.month, 1)
+    r1 = _rpi_for_month(_add_months(m0, -lag).isoformat(), ctx)
+    r2 = _rpi_for_month(_add_months(m0, -lag + 1).isoformat(), ctx)
+    if r1 is None or r2 is None:
+        return None
+    dim = calendar.monthrange(d.year, d.month)[1]
+    return r1 + (d.day - 1) / dim * (r2 - r1)
+
+
+def index_ratio_at(isin, on_date, anchors, ctx):
+    """DMO-anchored index ratio rolled forward to `on_date`: published
+    ratio x RefIndex(on_date) / RefIndex(anchor settlement date). None if
+    this ISIN has no DMO anchor (or RPI data is unavailable)."""
+    if not anchors or not anchors.get("settlement_date"):
+        return None
+    ratio = (anchors.get("ratios") or {}).get(isin)
+    if ratio is None:
+        return None
+    lag = (anchors.get("lag_months") or {}).get(isin, 3)
+    ref_anchor = _reference_index(date.fromisoformat(anchors["settlement_date"]), lag, ctx)
+    ref_now = _reference_index(on_date, lag, ctx)
+    if not ref_anchor or ref_now is None:
+        return None
+    return ratio * ref_now / ref_anchor
+
+
+def apply_hl_prices(securities, hl_data, il_index_ratio_anchors,
+                    rpi_history=None, curves=None):
     """Merge today's HL prices into `securities` (mutates and returns it):
     updates today's series point for matching ISINs (adding one if not
     already present for today), and creates a new minimal security entry
@@ -1257,8 +1352,9 @@ def apply_hl_prices(securities, hl_data, il_index_ratio_anchors):
     today_str = datetime.utcnow().strftime("%Y-%m-%d")
     today = date.fromisoformat(today_str)
     by_isin = {s["isin"]: s for s in securities}
-    ratios = (il_index_ratio_anchors or {}).get("ratios", {})
-    updated, added = 0, 0
+    ctx = build_index_context(rpi_history, curves)
+    settle_date = _next_business_day(today)
+    updated, added, skipped_il = 0, 0, 0
 
     for isin, hl in hl_data.items():
         sec = by_isin.get(isin)
@@ -1277,7 +1373,17 @@ def apply_hl_prices(securities, hl_data, il_index_ratio_anchors):
             added += 1
 
         redemption_date = sec.get("redemption_date") or hl["maturity_date"]
-        index_ratio = ratios.get(isin) if sec["type"] == "index_linked" else None
+        index_ratio = None
+        if sec["type"] == "index_linked":
+            index_ratio = index_ratio_at(isin, settle_date, il_index_ratio_anchors, ctx)
+            if index_ratio is None:
+                # Never store a REAL clean price as if it were a cash
+                # dirty price -- skip rather than put in a wrong point.
+                skipped_il += 1
+                print(f"  skipped HL linker {isin} ({hl['name']}): no index "
+                      f"ratio available (not in il_gilts_raw anchors, or RPI "
+                      f"data missing)")
+                continue
         dirty_price = compute_dirty_price(hl["clean_price"], sec.get("coupon_pct"),
                                            redemption_date, today, index_ratio)
         point = {
@@ -1292,7 +1398,8 @@ def apply_hl_prices(securities, hl_data, il_index_ratio_anchors):
         updated += 1
 
     print(f"  applied HL prices to {updated} securities ({added} newly "
-          f"added, not previously in the dataset)")
+          f"added, not previously in the dataset); {skipped_il} linkers "
+          f"skipped for lack of an index ratio")
     return securities
 
 
@@ -1310,6 +1417,18 @@ def discover_tradeweb_raw_files():
     return sorted(
         os.path.join(TRADEWEB_RAW_DIR, fn) for fn in os.listdir(TRADEWEB_RAW_DIR)
         if fn.lower().endswith((".csv", ".xlsx", ".xls")) and not fn.startswith("~$"))
+
+
+def _parse_tw_date(value):
+    """Parse a date cell from a Tradeweb export. CSVs give text like
+    '29/09/2026' (day first). Excel files give real dates, which arrive
+    as '2026-10-05 00:00:00' -- pandas' dayfirst=True would WRONGLY swap
+    those to 2026-05-10, so ISO-style values are parsed as ISO and only
+    other text is read day-first."""
+    v = str(value).strip()
+    if re.match(r"^\d{4}-\d{2}-\d{2}", v):
+        return pd.to_datetime(v[:10], format="%Y-%m-%d", errors="coerce")
+    return pd.to_datetime(v, errors="coerce", dayfirst=True)
 
 
 def _tradeweb_name(coupon_pct, maturity_date, is_il):
@@ -1364,8 +1483,8 @@ def parse_tradeweb_csv(path):
             skipped_type += 1
             continue  # Bills, Strips, or anything else -- not a gilt we track
         isin = str(r["ISIN"]).strip()
-        date = pd.to_datetime(r["Close of Business Date"], errors="coerce", dayfirst=True)
-        maturity = pd.to_datetime(r["Maturity"], errors="coerce", dayfirst=True)
+        date = _parse_tw_date(r["Close of Business Date"])
+        maturity = _parse_tw_date(r["Maturity"])
         coupon = pd.to_numeric(r["Coupon"], errors="coerce")
         dirty = pd.to_numeric(r["Dirty Price"], errors="coerce")
         yld = pd.to_numeric(r["Yield"], errors="coerce")
@@ -1384,8 +1503,10 @@ def parse_tradeweb_csv(path):
             "dirty_price": float(dirty),
         })
 
+    dates_found = sorted({r["date"] for r in rows})
     print(f"  parsed {len(rows)} gilt rows from {path} "
-          f"({skipped_type} Bills/Strips/other rows skipped)")
+          f"({skipped_type} Bills/Strips/other rows skipped); "
+          f"price date(s) in file: {dates_found}")
     return rows
 
 
@@ -1446,6 +1567,12 @@ def main():
               "gilt_yields.json if present. E.g. --only boe-latest,"
               "hl-prices for a fast daily refresh; --only dmo,boe-archive "
               "to skip the daily-only pieces."))
+    parser.add_argument(
+        "--purge-dates", default="",
+        help=("Comma-separated YYYY-MM-DD dates to DELETE from every "
+              "security's series before anything else runs -- a one-off "
+              "clean-up for points saved under a wrong date, e.g. "
+              "--purge-dates 2026-02-10,2026-05-10 --only tradeweb"))
     args = parser.parse_args()
 
     valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios",
@@ -1464,6 +1591,15 @@ def main():
         except Exception as e:
             print(f"Could not read existing gilt_yields.json ({e}) -- "
                   f"skipped components will start from empty instead.")
+
+    if args.purge_dates and previous:
+        bad = {d.strip() for d in args.purge_dates.split(",") if d.strip()}
+        removed = 0
+        for sec in previous.get("securities", []):
+            before = len(sec.get("series", []))
+            sec["series"] = [p for p in sec.get("series", []) if p["date"] not in bad]
+            removed += before - len(sec["series"])
+        print(f"=== Purged {removed} points dated {sorted(bad)} ===")
 
     # --- securities (DMO) ---
     if "dmo" in components:
@@ -1548,7 +1684,8 @@ def main():
         print("\n=== Fetching Hargreaves Lansdown daily gilt prices ===")
         hl_data = fetch_hl_gilt_prices()
         if hl_data:
-            securities = apply_hl_prices(securities, hl_data, il_index_ratio_anchors)
+            securities = apply_hl_prices(securities, hl_data, il_index_ratio_anchors,
+                                         rpi_history, curves)
         else:
             print("  no HL prices fetched -- leaving securities unchanged "
                   "for today.")
