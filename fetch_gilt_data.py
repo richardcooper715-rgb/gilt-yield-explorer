@@ -1309,7 +1309,7 @@ def discover_tradeweb_raw_files():
         return []
     return sorted(
         os.path.join(TRADEWEB_RAW_DIR, fn) for fn in os.listdir(TRADEWEB_RAW_DIR)
-        if fn.lower().endswith(".csv"))
+        if fn.lower().endswith((".csv", ".xlsx", ".xls")) and not fn.startswith("~$"))
 
 
 def _tradeweb_name(coupon_pct, maturity_date, is_il):
@@ -1339,7 +1339,11 @@ def parse_tradeweb_csv(path):
     script's manual-download sources.
     """
     try:
-        df = pd.read_csv(path, encoding="utf-8-sig", dtype=str)
+        if path.lower().endswith((".xlsx", ".xls")):
+            df = pd.read_excel(path, dtype=str)   # first sheet; same columns as the CSV
+            df.columns = [str(c).strip() for c in df.columns]
+        else:
+            df = pd.read_csv(path, encoding="utf-8-sig", dtype=str)
     except Exception as e:
         print(f"  could not read {path}: {e}")
         return []
