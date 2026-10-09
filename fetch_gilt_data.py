@@ -1339,6 +1339,11 @@ def index_ratio_at(isin, on_date, anchors, ctx):
     return ratio * ref_now / ref_anchor
 
 
+# HL quotes the old-style (8-month RPI lag) index-linked gilts as cash prices
+# that already include the index ratio; the newer 3-month-lag ones are real.
+HL_CASH_QUOTED_LAGS = (8,)
+
+
 def apply_hl_prices(securities, hl_data, il_index_ratio_anchors,
                     rpi_history=None, curves=None):
     """Merge today's HL prices into `securities` (mutates and returns it):
@@ -1384,8 +1389,22 @@ def apply_hl_prices(securities, hl_data, il_index_ratio_anchors,
                       f"ratio available (not in il_gilts_raw anchors, or RPI "
                       f"data missing)")
                 continue
-        dirty_price = compute_dirty_price(hl["clean_price"], sec.get("coupon_pct"),
-                                           redemption_date, today, index_ratio)
+        lag = ((il_index_ratio_anchors or {}).get("lag_months") or {}).get(isin)
+        if sec["type"] == "index_linked" and lag in HL_CASH_QUOTED_LAGS:
+            # Old-style (8-month lag) linkers -- the 2030 and 2035: HL's
+            # quoted price ALREADY includes the index ratio (it is a cash
+            # price), so it must NOT be scaled again. Only the accrued
+            # interest is real and needs indexing:
+            #     dirty = quoted price + real accrued x index ratio
+            real_accrued = compute_dirty_price(0.0, sec.get("coupon_pct"),
+                                                redemption_date, today)
+            dirty_price = round(hl["clean_price"] + real_accrued * index_ratio, 4)
+            print(f"  {sec.get('name', isin)}: HL price treated as already "
+                  f"index-adjusted (8-month-lag gilt, ratio {index_ratio:.4f}) "
+                  f"-> dirty {dirty_price}")
+        else:
+            dirty_price = compute_dirty_price(hl["clean_price"], sec.get("coupon_pct"),
+                                               redemption_date, today, index_ratio)
         point = {
             "date": today_str,
             "yield": hl["yield_pct"],  # None for index-linked -- HL doesn't publish one
