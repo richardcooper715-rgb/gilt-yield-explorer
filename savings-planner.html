@@ -151,6 +151,16 @@ svg text{fill:var(--muted);font-size:11px}
     <h2>Funds, shares &amp; cash</h2>
     <p class="small muted">Taken from your account files and included in the totals. The strategy itself only trades gilts, so these are shown for completeness. <span id="otherAsOf"></span></p>
     <div class="tablewrap"><table id="otherTable"></table></div>
+    <h3>Add a holding by hand</h3>
+    <p class="small muted">For anything the downloads don't include, such as the Barclays cash account. Entries added here stay when you reload the downloads. To change one, edit its value in the table.</p>
+    <div class="row noprint">
+      <label class="f">Account<select id="manAcct"></select></label>
+      <label class="f">Description<input id="manName" value="Cash" style="width:180px"></label>
+      <label class="f">Kind<select id="manKind"><option value="cash">Cash</option><option value="mmf">Money market fund</option><option value="fund">Fund / share</option><option value="ilfund">Index-linked gilt fund</option></select></label>
+      <label class="f">Value £<input type="number" step="1" id="manValue"></label>
+      <label class="f">Yield %<input type="number" step="0.01" id="manYield" class="sm" value="0"></label>
+      <button class="b" id="manAdd" style="align-self:flex-end">Add</button>
+    </div>
   </div>
   <div class="card noprint">
     <h2>Paste prices in bulk</h2>
@@ -493,12 +503,14 @@ function renderAccounts(){
 }
 function renderOther(){
   const O=S.other||[]; const el=document.getElementById("otherTable");
+  const ms=document.getElementById("manAcct"), cur=ms.value; ms.innerHTML=S.accounts.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join(""); if([...ms.options].some(o=>o.value===cur)) ms.value=cur; else { const b=S.accounts.find(a=>/barclays/i.test(a.name)); if(b) ms.value=b.id; }
   document.getElementById("otherAsOf").textContent=S.otherPricesAsOf?`Prices updated at ${S.otherPricesAsOf}.`:"";
-  if(!O.length){ el.innerHTML=`<tbody><tr><td class="muted">None loaded. Load your HL and Barclays downloads on tab 1.</td></tr></tbody>`; return; }
+  if(!O.length){ el.innerHTML=`<tbody><tr><td class="muted">None loaded yet. Load your HL and Barclays downloads on tab 1, or add a holding by hand below.</td></tr></tbody>`; return; }
   const kinds={cash:"Cash",mmf:"Money market fund",ilfund:"Index-linked gilt fund",fund:"Fund / share"};
   let t=0, inc=0;
   el.innerHTML=`<thead><tr><th>Holding</th><th>Account</th><th>Kind</th><th class="num">Value</th><th class="num">Yield</th></tr></thead><tbody>`+
-    [...O].sort((a,b)=>b.value-a.value).map(o=>{ t+=Number(o.value)||0; inc+=(Number(o.value)||0)*(Number(o.yield)||0)/100; return `<tr><td>${esc(o.name)}</td><td>${esc(acctById(o.acct).name)}</td><td>${kinds[o.kind]||o.kind}</td><td class="num">${gbp(o.value)}</td><td class="num">${o.yield?Number(o.yield).toFixed(2)+"%":"–"}</td></tr>`; }).join("")+
+    O.map((o,i)=>[o,i]).sort((a,b)=>(b[0].manual?1:0)-(a[0].manual?1:0)||b[0].value-a[0].value).map(([o,i])=>{ t+=Number(o.value)||0; inc+=(Number(o.value)||0)*(Number(o.yield)||0)/100;
+      return `<tr><td>${esc(o.name)}${o.manual?` <span class="tag C">added by hand</span>`:""}</td><td>${esc(acctById(o.acct).name)}</td><td>${kinds[o.kind]||o.kind}</td><td class="num">${o.manual?`<input type="number" step="1" data-man="${i}" value="${Math.round(o.value*100)/100}">`:gbp(o.value)}</td><td class="num">${o.yield?Number(o.yield).toFixed(2)+"%":"–"}${o.manual?` <button class="g noprint" data-delman="${i}">Remove</button>`:""}</td></tr>`; }).join("")+
     `</tbody><tfoot><tr><td colspan="3">Total</td><td class="num">${gbp(t)}</td><td class="num">${gbp(inc)} p.a.</td></tr></tfoot>`;
 }
 function renderHoldings(){
@@ -737,6 +749,7 @@ document.addEventListener("change",e=>{
   if(d.h!=null){ const h=S.holdings[+d.h]; h[d.f]= d.f==="acct"? el.value : num(el.value); }
   else if(d.acc!=null){ S.accounts[+d.acc][d.f]=el.value; }
   else if(d.p!=null){ S.people[+d.p][d.f]= d.f==="name"? el.value : d.f==="gift"? el.checked : (num(el.value)||0); }
+  else if(d.man!=null){ S.other[+d.man].value=num(el.value)||0; }
   else if(d.sell!=null){ if(el.value==="") delete S.sellAlloc[d.sell]; else S.sellAlloc[d.sell]=Number(el.value); }
   else if(["spend","spendRate","sippDraw","cashWrapped","inflation","planDate","otherReturn"].includes(el.id)){ S[el.id]= el.id==="planDate"? el.value : (num(el.value)||0); }
   else if(el.id==="spend2"){ S.spend=num(el.value)||0; }
@@ -746,9 +759,14 @@ document.addEventListener("change",e=>{
 document.addEventListener("click",e=>{
   const d=e.target.dataset;
   if(d.delacc!=null){ S.accounts.splice(+d.delacc,1); persist(); render(); }
+  if(d.delman!=null){ S.other.splice(+d.delman,1); persist(); render(); }
   if(d.delp!=null){ S.people.splice(+d.delp,1); persist(); render(); }
 });
 document.getElementById("addAcct").onclick=()=>{ S.accounts.push({id:"a"+Date.now(),name:"New account",type:"Taxable"}); persist(); render(); };
+document.getElementById("manAdd").onclick=()=>{
+  const v=parseFloat(document.getElementById("manValue").value); if(!(v>0)){ alert("Enter a value in £."); return; }
+  (S.other=S.other||[]).push({acct:document.getElementById("manAcct").value, name:document.getElementById("manName").value||"Cash", kind:document.getElementById("manKind").value, value:v, yield:parseFloat(document.getElementById("manYield").value)||0, manual:true});
+  document.getElementById("manValue").value=""; persist(); render(); };
 document.getElementById("addPerson").onclick=()=>{ S.people.push({name:"Name",isa:20000,sipp:0,gift:false}); persist(); render(); };
 document.getElementById("pasteBtn").onclick=()=>{
   let n=0, bad=[];
@@ -992,6 +1010,13 @@ async function importHL(wb){
     const C= isBarc? {name:col("investment"),isin:col("identifier"),units:col(/^quantity/),price:col("last price (p)"),value:col("value (£)",/^value$/),yld:-1,code:-1}
                    : {code:col("code"),sedol:col("sedol"),name:col("stock"),yld:col(/^yield/),value:col(/^value/),units:col(/^units/),price:col("price (p)",/^price/),isin:col("isin")};
     const g_=(r,i)=>i>=0? r[i] : null;
+    // HL downloads show the cash balance above the holdings table (e.g. "Total cash:" in column B), not as a holding.
+    let hdrCash=null;
+    if(!isBarc){
+      for(let k=0;k<hi;k++){ const r=rows[k]; const lab=String((r&&r[0])||""); if(/cash/i.test(lab)&&!/available/i.test(lab)&&r[1]!=null&&r[1]!==""){ hdrCash=toNum(r[1]); break; } }
+      if(hdrCash==null&&rows[6]&&rows[6][1]!=null&&!isNaN(toNum(rows[6][1]))&&String(rows[6][1]).trim()!=="") hdrCash=toNum(rows[6][1]); // fallback: cell B7
+      if(hdrCash) other.push({acct:id,name:"Cash",value:hdrCash,kind:"cash",yield:0});
+    }
     for(let k=(isBarc?bi:hi)+1;k<rows.length;k++){
       const r=rows[k]; if(!r||r.every(v=>v==null||v==="")) continue;
       const code=g_(r,C.code), name=g_(r,C.name), isin=g_(r,C.isin), sedol=g_(r,C.sedol!=null?C.sedol:-1);
@@ -1002,7 +1027,7 @@ async function importHL(wb){
       const g=isCash? null : matchGilt(sedol!=null?sedol:code,name,isin);
       if(g){ const il=g.type==="IL";
         holdings.push({isin:g.isin,units,acct:id,price: il?null:price, ratio: il?(ratios[g.isin]||null):null, value: il?(value||null):null});
-      } else if(isCash){ if(value) other.push({acct:id,name:"Cash",value,kind:"cash",yield:0}); }
+      } else if(isCash){ if(value&&hdrCash==null) other.push({acct:id,name:"Cash",value,kind:"cash",yield:0}); } // avoid counting cash twice
       else if(value>0){
         const nm=String(name).replace(/\s+/g," ").trim();
         if(/treasury|govt|gilt/i.test(nm)&&!/fund|etf|ucits/i.test(nm)) unmatched.push(nm);
@@ -1041,7 +1066,7 @@ document.getElementById("loadHL").onchange=async e=>{
   const ids=new Set(acc.map(a=>a.id));
   acc.forEach(a=>{ const i=S.accounts.findIndex(x=>x.id===a.id); if(i>=0) S.accounts[i]=a; else S.accounts.push(a); });
   S.holdings=S.holdings.filter(h=>!ids.has(h.acct)).concat(hold);
-  S.other=(S.other||[]).filter(o=>!ids.has(o.acct)).concat(oth);
+  S.other=(S.other||[]).filter(o=>o.manual||!ids.has(o.acct)).concat(oth); // hand-entered items survive reloads
   S.sellAlloc={};
   S.cashWrapped=Math.round(S.other.filter(o=>o.kind==="cash"&&acctById(o.acct).type!=="Taxable").reduce((t,o)=>t+o.value,0));
   persist(); render();
