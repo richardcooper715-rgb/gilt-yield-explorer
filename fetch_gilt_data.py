@@ -1781,6 +1781,26 @@ def main():
     with open("gilt_yields.json", "w") as f:
         json.dump(output, f, separators=(",", ":"))
 
+    # Small companion file for other apps (e.g. the Savings Strategy
+    # Planner): just the latest price point per security, so they don't
+    # need to download the full gilt_yields.json.
+    latest = []
+    for sec in securities:
+        pts = [p for p in (sec.get("series") or []) if p.get("dirty_price") is not None]
+        if not pts:
+            continue
+        pt = max(pts, key=lambda q: q["date"])
+        latest.append({
+            "isin": sec.get("isin"), "name": sec.get("name"), "type": sec.get("type"),
+            "coupon_pct": sec.get("coupon_pct"), "redemption_date": sec.get("redemption_date"),
+            "date": pt["date"], "dirty_price": pt["dirty_price"], "yield": pt.get("yield"),
+        })
+    with open("gilt_latest.json", "w") as f:
+        json.dump({"generated": output.get("generated"),
+                   "il_index_ratio_anchors": il_index_ratio_anchors,
+                   "securities": latest}, f, separators=(",", ":"))
+    print(f"Wrote gilt_latest.json: {len(latest)} securities.")
+
     curve_summary = ", ".join(
         f"{c}={len(curves.get(c, {}).get('spot', []))}sp+"
         f"{len(curves.get(c, {}).get('forward', []))}fwd"

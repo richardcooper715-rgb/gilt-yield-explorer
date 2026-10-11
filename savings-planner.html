@@ -1,0 +1,930 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Savings Strategy Planner</title>
+<style>
+:root{
+  --bg:#f6f5f1; --panel:#ffffff; --ink:#1d2430; --muted:#5d6675; --line:#e2dfd6;
+  --accent:#1f4e79; --accent-soft:#e3edf7; --wrap:#2f7d5b; --tax:#b5651d; --il:#7a4fa3;
+  --warn-bg:#fff4e0; --warn:#8a5300; --bad-bg:#fde8e6; --bad:#9b2c20; --ok-bg:#e6f4ec; --ok:#1e6b45;
+  --input:#fbfaf7;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#14171c; --panel:#1c2027; --ink:#e7e9ee; --muted:#9aa3b2; --line:#2d333d;
+    --accent:#7fb0e0; --accent-soft:#1f2c3b; --wrap:#5fc495; --tax:#e09a55; --il:#b693dc;
+    --warn-bg:#3a2d14; --warn:#f1c27a; --bad-bg:#3d1d1a; --bad:#f2a097; --ok-bg:#16301f; --ok:#8fd8ae;
+    --input:#171a20;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#14171c; --panel:#1c2027; --ink:#e7e9ee; --muted:#9aa3b2; --line:#2d333d;
+  --accent:#7fb0e0; --accent-soft:#1f2c3b; --wrap:#5fc495; --tax:#e09a55; --il:#b693dc;
+  --warn-bg:#3a2d14; --warn:#f1c27a; --bad-bg:#3d1d1a; --bad:#f2a097; --ok-bg:#16301f; --ok:#8fd8ae;
+  --input:#171a20;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+header{padding:20px 16px 0;max-width:1180px;margin:0 auto}
+h1{font-size:22px;margin:0 0 4px}
+.sub{color:var(--muted);margin:0 0 14px}
+nav{display:flex;gap:4px;flex-wrap:wrap;border-bottom:1px solid var(--line)}
+nav button{background:none;border:0;border-bottom:3px solid transparent;padding:10px 12px;font:inherit;color:var(--muted);cursor:pointer}
+nav button.on{color:var(--accent);border-color:var(--accent);font-weight:600}
+main{max-width:1180px;margin:0 auto;padding:16px}
+section.tab{display:none}
+section.tab.on{display:block}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-bottom:16px}
+.card h2{font-size:17px;margin:0 0 6px}
+.card h3{font-size:15px;margin:14px 0 6px}
+.card p{margin:6px 0}
+.muted{color:var(--muted)}
+.small{font-size:13px}
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(170px,1fr))}
+.stat{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:12px}
+.stat .k{font-size:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.stat .v{font-size:22px;font-weight:650;margin-top:2px;font-variant-numeric:tabular-nums}
+.stat .n{font-size:12px;color:var(--muted)}
+.tablewrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{padding:6px 8px;border-bottom:1px solid var(--line);text-align:left;vertical-align:middle;white-space:nowrap}
+th{font-size:12px;color:var(--muted);font-weight:600;background:var(--panel);position:sticky;top:0}
+td.num,th.num{text-align:right;font-variant-numeric:tabular-nums}
+tfoot td{font-weight:650;border-top:2px solid var(--line)}
+input,select,textarea{font:inherit;color:var(--ink);background:var(--input);border:1px solid var(--line);border-radius:6px;padding:5px 7px}
+input[type=number]{width:110px;text-align:right}
+input.sm{width:80px}
+textarea{width:100%;min-height:90px;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:13px}
+
+.b{display:inline-block;font:inherit;background:var(--accent);color:#fff;border:0;border-radius:6px;padding:7px 12px;cursor:pointer}
+:root[data-theme="dark"] .b{color:#0d1520}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]) .b{color:#0d1520}}
+
+.g{display:inline-block;font:inherit;background:none;color:var(--accent);border:1px solid var(--accent);border-radius:6px;padding:6px 11px;cursor:pointer}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:8px 0}
+label.f{display:flex;flex-direction:column;gap:3px;font-size:13px;color:var(--muted)}
+.tag{display:inline-block;font-size:11px;padding:1px 6px;border-radius:9px;font-weight:600}
+.tag.C{background:var(--accent-soft);color:var(--accent)}
+.tag.IL{background:color-mix(in srgb,var(--il) 18%,transparent);color:var(--il)}
+.w{color:var(--wrap);font-weight:600}.t{color:var(--tax);font-weight:600}
+.note{border-radius:8px;padding:10px 12px;margin:10px 0;font-size:14px}
+.note.warn{background:var(--warn-bg);color:var(--warn)}
+.note.bad{background:var(--bad-bg);color:var(--bad)}
+.note.ok{background:var(--ok-bg);color:var(--ok)}
+.note.info{background:var(--accent-soft);color:var(--ink)}
+ol.steps{padding-left:20px}
+ol.steps li{margin:8px 0}
+.flag{color:var(--warn);font-size:12px}
+svg text{fill:var(--muted);font-size:11px}
+.legend{display:flex;gap:14px;font-size:12px;color:var(--muted);margin-top:4px}
+.legend span::before{content:"";display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;vertical-align:-1px;background:var(--c)}
+@media print{nav,.noprint{display:none!important} section.tab{display:block!important} body{background:#fff}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Savings Strategy Planner</h1>
+  <p class="sub">A step-by-step helper for running the family gilt strategy. Nothing here places trades. It works out the numbers so you can check them before acting on your platform.</p>
+  <nav id="nav">
+    <button data-t="start" class="on">1 · Start here</button>
+    <button data-t="holdings">2 · Holdings &amp; prices</button>
+    <button data-t="overview">3 · Overview</button>
+    <button data-t="income">4 · Income for the year</button>
+    <button data-t="april">5 · April wrapper move</button>
+    <button data-t="guide">6 · Rules &amp; watch-outs</button>
+  </nav>
+</header>
+<main>
+
+<!-- START -->
+<section class="tab on" id="t-start">
+  <div class="card">
+    <h2>How to use this</h2>
+    <ol class="steps">
+      <li><b>Load the HL data workbook</b> (button below). This fills in every account, holding, price and index ratio. Funds, shares and cash are included in the totals too.</li>
+      <li><b>Holdings &amp; prices:</b> check the holdings. Prices update automatically from the gilt yield explorer whenever you open the app online, or press "Update prices" on tab 2. Otherwise, tell the app which account each gilt is in, then enter today's price (from your platform or the gilt yield explorer). If you're not sure, the value shown on the platform statement can be typed in instead.</li>
+      <li><b>Overview:</b> check the totals, how much is tax-wrapped and how much is taxable, and whether planned spending looks sustainable.</li>
+      <li><b>Income for the year:</b> set how much you want to spend. The app shows how much comes from gilt interest and how much to raise by selling small amounts of low-coupon gilts.</li>
+      <li><b>April wrapper move:</b> once a year, just after 6 April, the app works out what to sell in the taxable accounts and buy inside the ISAs/SIPPs.</li>
+      <li><b>Save your work</b> with the button below. Your entries are also remembered in this browser, but a saved file is safer.</li>
+    </ol>
+    <div class="row noprint">
+      <button class="g" id="saveBtn">Save my data (file)</button>
+      <label class="b">Load HL data workbook (.xlsx)<input type="file" id="loadHL" accept=".xlsx,.xlsm,.xls" hidden></label>
+      <label class="g">Load saved data / gilt explorer portfolio<input type="file" id="loadFile" accept=".json,application/json" hidden></label>
+      <button class="g" id="printBtn">Print this page</button>
+      <button class="g" id="resetBtn">Clear all data</button>
+    </div>
+    <p class="small muted" id="loadMsg"></p>
+  </div>
+  <div class="card">
+    <h2>Before acting on anything</h2>
+    <p>The app gives estimates. Before any large trade, check the platform's own quote and settlement cash. If something doesn't make sense, stop and ask an adviser. With this strategy there is almost never a reason to rush.</p>
+  </div>
+</section>
+
+<!-- HOLDINGS -->
+<section class="tab" id="t-holdings">
+  <div class="card noprint">
+    <h2>Latest prices</h2>
+    <p class="small muted">Prices come from the gilt yield explorer's daily data (Tradeweb and HL), which updates automatically every afternoon. Index-linked gilts use the explorer's latest DMO index ratios.</p>
+    <div class="row"><button class="b" id="priceBtn">Update prices from the gilt explorer</button><span class="small muted" id="priceMsg"></span></div>
+  </div>
+  <div class="card">
+    <h2>Accounts</h2>
+    <p class="small muted">Each account is <b>ISA</b> (tax-free), <b>SIPP</b> (pension: tax-free growth but withdrawals are taxed), or <b>Taxable</b> (HL Fund &amp; Share, Barclays Smart Investor). On first load, high-coupon gilts are placed in "Wrapped – to assign" and low-coupon gilts in "Taxable – to assign", following the strategy. Reassign each holding to its real account.</p>
+    <div class="tablewrap"><table id="acctTable"></table></div>
+    <div class="row noprint"><button class="g" id="addAcct">+ Add account</button></div>
+  </div>
+  <div class="card">
+    <h2>Holdings</h2>
+    <p class="small muted"><b>Price</b> is per £100 nominal, as quoted. For <span class="tag IL">IL</span> index-linked gilts, also enter the <b>index ratio</b> (the inflation uplift, e.g. 1.45; shown on the platform or DMO website). If you'd rather, type the platform's <b>Value £</b>, which overrides the price calculation.</p>
+    <div class="tablewrap"><table id="holdTable"></table></div>
+  </div>
+  <div class="card">
+    <h2>Funds, shares &amp; cash</h2>
+    <p class="small muted">Taken from the HL workbook and included in the totals. The strategy itself only trades gilts, so these are shown for completeness.</p>
+    <div class="tablewrap"><table id="otherTable"></table></div>
+  </div>
+  <div class="card noprint">
+    <h2>Paste prices in bulk</h2>
+    <p class="small muted">One gilt per line: <code>ISIN, price</code> or <code>ISIN, price, index ratio</code>. Commas, tabs or spaces all work, so you can paste from a spreadsheet.</p>
+    <textarea id="pasteBox" placeholder="GB00BMGR2916, 78.40&#10;GB00BMF9LH90, 52.10, 1.47"></textarea>
+    <div class="row"><button class="b" id="pasteBtn">Apply prices</button><span class="small muted" id="pasteMsg"></span></div>
+  </div>
+</section>
+
+<!-- OVERVIEW -->
+<section class="tab" id="t-overview">
+  <div id="ovMissing"></div>
+  <div class="grid" id="ovStats"></div>
+  <div class="card" style="margin-top:16px">
+    <h2>When the money comes back (maturity ladder)</h2>
+    <p class="small muted">Nominal value redeemed each year (index-linked shown with the uplift where an index ratio is entered).</p>
+    <div id="ladder"></div>
+    <div class="legend"><span style="--c:var(--wrap)">Tax-wrapped</span><span style="--c:var(--tax)">Taxable</span></div>
+  </div>
+  <div class="card">
+    <h2>Interest by month (next 12 months)</h2>
+    <p class="small muted">Coupons are paid twice a year. This helps plan when cash arrives in each account.</p>
+    <div id="couponChart"></div>
+    <div class="legend"><span style="--c:var(--wrap)">Into wrapped accounts</span><span style="--c:var(--tax)">Into taxable accounts</span></div>
+  </div>
+  <div class="card">
+    <h2>Is the spending sustainable?</h2>
+    <div class="row">
+      <label class="f">Inflation assumption % p.a.<input type="number" step="0.1" id="inflation"></label>
+      <label class="f">Annual spending (today's £)<input type="number" step="1000" id="spend2"></label>
+      <label class="f">Expected return on funds &amp; shares % p.a.<input type="number" step="0.5" id="otherReturn"></label>
+    </div>
+    <div id="sustain"></div>
+  </div>
+</section>
+
+<!-- INCOME -->
+<section class="tab" id="t-income">
+  <div class="card">
+    <h2>Where this year's spending comes from</h2>
+    <div class="row">
+      <label class="f">Spending needed this year £<input type="number" step="1000" id="spend"></label>
+      <label class="f">Spending rule: total % of portfolio<input type="number" step="0.1" id="spendRate"></label>
+      <label class="f">Planned SIPP withdrawals £ (taxable income)<input type="number" step="1000" id="sippDraw"></label>
+    </div>
+    <div id="incomeSummary"></div>
+  </div>
+  <div class="card">
+    <h2>A · Move interest out of the wrappers (the "swap")</h2>
+    <p class="small muted">Interest paid inside ISAs and SIPPs can't be spent directly without losing the tax benefit (ISA) or paying tax (SIPP). Instead, use that cash to <b>buy</b> gilts inside the wrapper and <b>sell</b> the same amount of similar gilts in a taxable account. The taxable sale proceeds are what you spend. It's best done every few months, not every time interest arrives.</p>
+    <div class="row"><label class="f">Cash currently sitting in ISAs/SIPPs £<input type="number" step="500" id="cashWrapped"></label></div>
+    <div id="swapTable"></div>
+  </div>
+  <div class="card">
+    <h2>B · Top-up sales of low-coupon gilts</h2>
+    <p class="small muted">Low-coupon gilts pay little interest, but most of their return comes from the price rising towards £100 at maturity, and that gain is tax-free. The rule: for each taxable holding, you may sell about <b>(spending rule % − its running yield) × value</b> each year.</p>
+    <div id="topupTable"></div>
+  </div>
+</section>
+
+<!-- APRIL -->
+<section class="tab" id="t-april">
+  <div class="card">
+    <h2>The annual April move (taxable → ISA/SIPP)</h2>
+    <p class="small muted">Each new tax year (from 6 April), move as much as the allowances permit from the taxable accounts into the ISAs/SIPPs, without ever being out of the market. Gilts maturing near April inside the wrappers provide the cash to buy straight away.</p>
+    <div class="row"><label class="f">Tax year starting<input type="date" id="planDate"></label></div>
+    <h3>Allowances this tax year</h3>
+    <p class="small muted">ISA: up to £20,000 per adult per tax year (check for changes). SIPP: generally limited to that person's UK earnings for the year (£3,600 gross if no earnings), lower still once a pension has been flexibly drawn, and no tax relief from age 75. <b>If Richard has died, Yvonne can also use an "additional permitted subscription"</b> equal to the value of his ISA. Ask the ISA provider about this.</p>
+    <div class="tablewrap"><table id="peopleTable"></table></div>
+    <div class="row noprint"><button class="g" id="addPerson">+ Add person</button></div>
+  </div>
+  <div class="card" id="aprilPlan"></div>
+</section>
+
+<!-- GUIDE -->
+<section class="tab" id="t-guide">
+  <div class="card">
+    <h2>The strategy in plain English</h2>
+    <ol class="steps">
+      <li><b>Mostly UK government bonds (gilts).</b> Gilts pay a fixed interest ("coupon") twice a year and repay £100 per £100 nominal on a known date. Index-linked gilts rise with inflation.</li>
+      <li><b>High-coupon gilts go inside ISAs/SIPPs</b>, because their interest would otherwise be taxed.</li>
+      <li><b>Low-coupon gilts go in the taxable accounts.</b> Their return comes mostly from the price rising to £100, and gains on gilts are free of Capital Gains Tax.</li>
+      <li><b>Each April</b>, move as much as allowances permit from taxable to wrapped (tab 5).</li>
+      <li><b>Through the year</b>, spend taxable interest, sell small amounts of low-coupon gilts (tab 4B), and "swap" interest out of the wrappers (tab 4A).</li>
+      <li><b>Keep it simple.</b> Holding to maturity is always a reasonable default. Switching between short and long gilts to profit from interest-rate moves is optional, and only worth doing with professional advice.</li>
+    </ol>
+  </div>
+  <div class="card">
+    <h2>Watch-outs</h2>
+    <ul>
+      <li><b>SIPPs are not tax-free income.</b> Withdrawals above the 25% tax-free part are taxed as income. From 6 April 2027 unused pension funds are also due to count towards Inheritance Tax (anything left to a spouse is still exempt).</li>
+      <li><b>Cash inside a Stocks &amp; Shares ISA:</b> from 6 April 2027, interest on uninvested cash in a S&amp;S ISA is due to carry a 22% charge, and an ISA can't hold only money-market funds. Park ISA cash in short gilts or a money-market fund alongside gilts.</li>
+      <li><b>Accrued Income Scheme:</b> buying or selling gilts in a taxable account between coupon dates moves some interest between buyer and seller for tax. With holdings over £5,000 nominal this has to go on the tax return. Keep the contract notes.</li>
+      <li><b>Inflation:</b> conventional gilts pay fixed amounts. Spending a fixed % each year from a mostly conventional portfolio steadily reduces what it can buy. See tab 3.</li>
+      <li><b>Gifts to Jamie:</b> the money paid into Jamie's ISA and SIPP is a gift and legally becomes his. Gifts paid by selling investments (capital) usually count as "potentially exempt transfers". They fall out of the estate after 7 years. Each parent's £3,000 annual exemption also applies. The separate exemption for regular gifts out of surplus <i>income</i> needs evidence that the gifts come from income, not capital. Keep a record of each gift.</li>
+      <li><b>Probate:</b> accounts in one person's sole name are frozen on death until probate. Keep enough cash in each person's own or joint name for several months of spending.</li>
+      <li><b>Check reference data:</b> the list of gilts inside this app comes from the DMO list of gilts in issue. Before buying a suggested gilt, check that it still exists and is available on your platform.</li>
+    </ul>
+  </div>
+</section>
+</main>
+
+<script>
+/* ---------- Reference data: UK gilts in issue (DMO, Oct 2026). [isin, name, coupon %, maturity, type] ---------- */
+const REF = [
+["GB00BNNGP668","0⅜% Treasury Gilt 2026",0.375,"2026-10-22","C"],
+["GB00BL6C7720","4⅛% Treasury Gilt 2027",4.125,"2027-01-29","C"],
+["GB00BPSNB460","3¾% Treasury Gilt 2027",3.75,"2027-03-07","C"],
+["GB00BDRHNP05","1¼% Treasury Gilt 2027",1.25,"2027-07-22","C"],
+["GB00B16NNR78","4¼% Treasury Gilt 2027",4.25,"2027-12-07","C"],
+["GB00BMBL1G81","0⅛% Treasury Gilt 2028",0.125,"2028-01-31","C"],
+["GB00BSQNRC93","4⅜% Treasury Gilt 2028",4.375,"2028-03-07","C"],
+["GB00BMF9LG83","4½% Treasury Gilt 2028",4.5,"2028-06-07","C"],
+["GB00BFX0ZL78","1⅝% Treasury Gilt 2028",1.625,"2028-10-22","C"],
+["GB0002404191","6% Treasury Stock 2028",6,"2028-12-07","C"],
+["GB00BLPK7227","0½% Treasury Gilt 2029",0.5,"2029-01-31","C"],
+["GB00BVP99566","4% Treasury Gilt 2029",4,"2029-05-22","C"],
+["GB00BQC82B83","4⅛% Treasury Gilt 2029",4.125,"2029-07-22","C"],
+["GB00BJMHB534","0⅞% Treasury Gilt 2029",0.875,"2029-10-22","C"],
+["GB00BSQNRD01","4⅜% Treasury Gilt 2030",4.375,"2030-03-07","C"],
+["GB00BWBR1P52","4⅝% Treasury Gilt 2030",4.625,"2030-05-22","C"],
+["GB00BL68HH02","0⅜% Treasury Gilt 2030",0.375,"2030-10-22","C"],
+["GB00B24FF097","4¾% Treasury Gilt 2030",4.75,"2030-12-07","C"],
+["GB00BVP99673","4⅛% Treasury Gilt 2031",4.125,"2031-03-07","C"],
+["GB00BMGR2809","0¼% Treasury Gilt 2031",0.25,"2031-07-31","C"],
+["GB00BPSNBF73","4% Treasury Gilt 2031",4,"2031-10-22","C"],
+["GB00BM8Z2T38","1% Treasury Gilt 2032",1,"2032-01-31","C"],
+["GB00BWGDRG14","4⅝% Treasury Gilt 2032",4.625,"2032-03-07","C"],
+["GB0004893086","4¼% Treasury Stock 2032",4.25,"2032-06-07","C"],
+["GB00BMV7TC88","3¼% Treasury Gilt 2033",3.25,"2033-01-31","C"],
+["GB00BVP99780","4⅛% Treasury Gilt 2033",4.125,"2033-03-07","C"],
+["GB00BM8Z2S21","0⅞% Green Gilt 2033",0.875,"2033-07-31","C"],
+["GB00BPJJKN53","4⅝% Treasury Gilt 2034",4.625,"2034-01-31","C"],
+["GB00BQC82C90","4¼% Treasury Gilt 2034",4.25,"2034-07-31","C"],
+["GB00B52WS153","4½% Treasury Gilt 2034",4.5,"2034-09-07","C"],
+["GB00BT7J0027","4½% Treasury Gilt 2035",4.5,"2035-03-07","C"],
+["GB00BMGR2916","0⅝% Treasury Gilt 2035",0.625,"2035-07-31","C"],
+["GB00BTXS1K06","4¾% Treasury Gilt 2035",4.75,"2035-10-22","C"],
+["GB0032452392","4¼% Treasury Stock 2036",4.25,"2036-03-07","C"],
+["GB00BWBR1N39","4⅞% Treasury Gilt 2036",4.875,"2036-07-31","C"],
+["GB00BVP99905","4⅝% Green Gilt 2037",4.625,"2037-03-07","C"],
+["GB00BZB26Y51","1¾% Treasury Gilt 2037",1.75,"2037-09-07","C"],
+["GB00BQC4R999","3¾% Treasury Gilt 2038",3.75,"2038-01-29","C"],
+["GB00B00NY175","4¾% Treasury Stock 2038",4.75,"2038-12-07","C"],
+["GB00BLPK7334","1⅛% Treasury Gilt 2039",1.125,"2039-01-31","C"],
+["GB00B3KJDS62","4¼% Treasury Gilt 2039",4.25,"2039-09-07","C"],
+["GB00BQC82D08","4⅜% Treasury Gilt 2040",4.375,"2040-01-31","C"],
+["GB00B6460505","4¼% Treasury Gilt 2040",4.25,"2040-12-07","C"],
+["GB00BVP99897","5¼% Treasury Gilt 2041",5.25,"2041-01-31","C"],
+["GB00BJQWYH73","1¼% Treasury Gilt 2041",1.25,"2041-10-22","C"],
+["GB00B1VWPJ53","4½% Treasury Gilt 2042",4.5,"2042-12-07","C"],
+["GB00BPJJKP77","4¾% Treasury Gilt 2043",4.75,"2043-10-22","C"],
+["GB00B84Z9V04","3¼% Treasury Gilt 2044",3.25,"2044-01-22","C"],
+["GB00BN65R313","3½% Treasury Gilt 2045",3.5,"2045-01-22","C"],
+["GB00BNNGP775","0⅞% Treasury Gilt 2046",0.875,"2046-01-31","C"],
+["GB00B128DP45","4¼% Treasury Gilt 2046",4.25,"2046-12-07","C"],
+["GB00BDCHBW80","1½% Treasury Gilt 2047",1.5,"2047-07-22","C"],
+["GB00BFWFPP71","1¾% Treasury Gilt 2049",1.75,"2049-01-22","C"],
+["GB00B39R3707","4¼% Treasury Gilt 2049",4.25,"2049-12-07","C"],
+["GB00BMBL1F74","0⅝% Treasury Gilt 2050",0.625,"2050-10-22","C"],
+["GB00BLH38158","1¼% Treasury Gilt 2051",1.25,"2051-07-31","C"],
+["GB00B6RNH572","3¾% Treasury Gilt 2052",3.75,"2052-07-22","C"],
+["GB00BM8Z2V59","1½% Green Gilt 2053",1.5,"2053-07-31","C"],
+["GB00BPCJD997","3¾% Treasury Gilt 2053",3.75,"2053-10-22","C"],
+["GB00BPSNBB36","4⅜% Treasury Gilt 2054",4.375,"2054-07-31","C"],
+["GB00BJLR0J16","1⅝% Treasury Gilt 2054",1.625,"2054-10-22","C"],
+["GB00B06YGN05","4¼% Treasury Gilt 2055",4.25,"2055-12-07","C"],
+["GB00BT7J0241","5⅜% Treasury Gilt 2056",5.375,"2056-01-31","C"],
+["GB00BD0XH204","1¾% Treasury Gilt 2057",1.75,"2057-07-22","C"],
+["GB00B54QLM75","4% Treasury Gilt 2060",4,"2060-01-22","C"],
+["GB00BMBL1D50","0½% Treasury Gilt 2061",0.5,"2061-10-22","C"],
+["GB00BMF9LF76","4% Treasury Gilt 2063",4,"2063-10-22","C"],
+["GB00BYYMZX75","2½% Treasury Gilt 2065",2.5,"2065-07-22","C"],
+["GB00BBJNQY21","3½% Treasury Gilt 2068",3.5,"2068-07-22","C"],
+["GB00BFMCN652","1⅝% Treasury Gilt 2071",1.625,"2071-10-22","C"],
+["GB00BLBDX619","1⅛% Treasury Gilt 2073",1.125,"2073-10-22","C"],
+["GB00B128DH60","1¼% Index-linked 2027",1.25,"2027-11-22","IL"],
+["GB00BZ1NTB69","0⅛% Index-linked 2028",0.125,"2028-08-10","IL"],
+["GB00B3Y1JG82","0⅛% Index-linked 2029",0.125,"2029-03-22","IL"],
+["GB0008932666","4⅛% Index-linked 2030",4.125,"2030-07-22","IL"],
+["GB00BNNGP551","0⅛% Index-linked 2031",0.125,"2031-08-10","IL"],
+["GB00B3D4VD98","1¼% Index-linked 2032",1.25,"2032-11-22","IL"],
+["GB00BMF9LJ15","0¾% Index-linked 2033",0.75,"2033-11-22","IL"],
+["GB00B46CGH68","0¾% Index-linked 2034",0.75,"2034-03-22","IL"],
+["GB0031790826","2% Index-linked 2035",2,"2035-01-26","IL"],
+["GB00BT7HZZ68","1⅛% Index-linked 2035",1.125,"2035-09-22","IL"],
+["GB00BYZW3J87","0⅛% Index-linked 2036",0.125,"2036-11-22","IL"],
+["GB00B1L6W962","1⅛% Index-linked 2037",1.125,"2037-11-22","IL"],
+["GB00BMY62Z61","1¾% Index-linked 2038",1.75,"2038-09-22","IL"],
+["GB00BLH38265","0⅛% Index-linked 2039",0.125,"2039-03-22","IL"],
+["GB00B3LZBF68","0⅝% Index-linked 2040",0.625,"2040-03-22","IL"],
+["GB00BGDYHF49","0⅛% Index-linked 2041",0.125,"2041-08-10","IL"],
+["GB00B3MYD345","0⅝% Index-linked 2042",0.625,"2042-11-22","IL"],
+["GB00B7RN0G65","0⅛% Index-linked 2044",0.125,"2044-03-22","IL"],
+["GB00BMF9LH90","0⅝% Index-linked 2045",0.625,"2045-03-22","IL"],
+["GB00BYMWG366","0⅛% Index-linked 2046",0.125,"2046-03-22","IL"],
+["GB00B24FFM16","0¾% Index-linked 2047",0.75,"2047-11-22","IL"],
+["GB00BZ13DV40","0⅛% Index-linked 2048",0.125,"2048-08-10","IL"],
+["GB00BT7J0134","1⅞% Index-linked 2049",1.875,"2049-09-22","IL"],
+["GB00B421JZ66","0½% Index-linked 2050",0.5,"2050-03-22","IL"],
+["GB00BNNGP882","0⅛% Index-linked 2051",0.125,"2051-03-22","IL"],
+["GB00B73ZYW09","0¼% Index-linked 2052",0.25,"2052-03-22","IL"],
+["GB00BPSNBG80","1¼% Index-linked 2054",1.25,"2054-11-22","IL"],
+["GB00B0CNHZ09","1¼% Index-linked 2055",1.25,"2055-11-22","IL"],
+["GB00BYVP4K94","0⅛% Index-linked 2056",0.125,"2056-11-22","IL"],
+["GB00BP9DLZ64","0⅛% Index-linked 2058",0.125,"2058-03-22","IL"],
+["GB00B4PTCY75","0⅜% Index-linked 2062",0.375,"2062-03-22","IL"],
+["GB00BD9MZZ71","0⅛% Index-linked 2065",0.125,"2065-11-22","IL"],
+["GB00BDX8CX86","0⅛% Index-linked 2068",0.125,"2068-03-22","IL"],
+["GB00BM8Z2W66","0⅛% Index-linked 2073",0.125,"2073-03-22","IL"]
+];
+const GILT = {}; REF.forEach(r=>GILT[r[0]]={isin:r[0],name:r[1],cpn:r[2],mat:new Date(r[3]+"T00:00:00"),type:r[4]});
+
+/* ---------- Original portfolio (gilt yield explorer export, 10 Oct 2026) ---------- */
+
+const HIGH_CPN = 3; // % — threshold for "high coupon"
+const TODAY = new Date(); TODAY.setHours(0,0,0,0);
+
+function defaultAccounts(){
+  return [
+    {id:"aw",name:"Wrapped – to assign",type:"Wrapped"},
+    {id:"at",name:"Taxable – to assign",type:"Taxable"},
+    {id:"R_ISA",name:"Richard HL ISA",type:"ISA"},
+    {id:"Y_ISA",name:"Yvonne HL ISA",type:"ISA"},
+    {id:"Y_SIP",name:"Yvonne HL SIPP",type:"SIPP"},
+    {id:"Y_FAS",name:"Yvonne HL Fund & Share",type:"Taxable"},
+    {id:"Y_BIA",name:"Yvonne Barclays Smart Investor",type:"Taxable"},
+    {id:"J_ISA",name:"Jamie HL ISA",type:"ISA"},
+    {id:"J_SIP",name:"Jamie HL SIPP",type:"SIPP"},
+    {id:"J_FAS",name:"Jamie HL Fund & Share",type:"Taxable"}
+  ];
+}
+function nextApril6(){ const y=TODAY.getFullYear(); const d=new Date(y,3,6); return (TODAY<=d?d:new Date(y+1,3,6)); }
+function iso(d){ return d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0"); }
+function holdingsFrom(port, prev){
+  const used=new Set();
+  return port.holdings.map(h=>{
+    const g=GILT[h.isin];
+    let m=-1;
+    if(prev){ m=prev.findIndex((p,i)=>!used.has(i)&&p.isin===h.isin&&p.units===h.units); if(m<0) m=prev.findIndex((p,i)=>!used.has(i)&&p.isin===h.isin); }
+    if(m>=0){ used.add(m); return Object.assign({},prev[m],{units:h.units}); }
+    const acct = g && g.type==="C" && g.cpn>=HIGH_CPN ? "aw" : "at";
+    return {isin:h.isin, units:h.units, acct, price:null, ratio:null, value:null};
+  });
+}
+function freshState(){
+  return {
+    accounts: defaultAccounts(),
+    holdings: [], other: [],
+    people: [{name:"Richard",isa:20000,sipp:0,gift:false},{name:"Yvonne",isa:20000,sipp:0,gift:false},{name:"Jamie",isa:20000,sipp:2700,gift:true}],
+    otherReturn:5,
+    spend:100000, spendRate:4, inflation:2.5, sippDraw:0, cashWrapped:0,
+    planDate: iso(nextApril6()), sellAlloc:{}
+  };
+}
+const KEY="savings-strategy-planner-v2";
+let S;
+try{ const raw=localStorage.getItem(KEY); S = raw? JSON.parse(raw) : freshState(); }catch(e){ S=freshState(); }
+S=Object.assign(freshState(),S); if(!Array.isArray(S.other)) S.other=[];
+function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){} }
+
+/* ---------- Helpers ---------- */
+const gbp = (n,dp=0)=> (n==null||isNaN(n))?"–":(n<0?"−":"")+"£"+Math.abs(n).toLocaleString("en-GB",{minimumFractionDigits:dp,maximumFractionDigits:dp});
+const pct = (n,dp=2)=> (n==null||isNaN(n)||!isFinite(n))?"–":(n*100).toFixed(dp)+"%";
+const esc = s=>String(s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const acctById = id => S.accounts.find(a=>a.id===id) || {id, name:"(deleted account)", type:"Taxable"};
+const isWrapped = h => acctById(h.acct).type!=="Taxable";
+const yrs = d => (d-TODAY)/(365.25*864e5);
+function addMonths(d,n){ const r=new Date(d); const day=r.getDate(); r.setDate(1); r.setMonth(r.getMonth()+n); const last=new Date(r.getFullYear(),r.getMonth()+1,0).getDate(); r.setDate(Math.min(day,last)); return r; }
+function couponDates(g, from, to){ // coupon dates in (from, to]
+  const out=[]; let d=new Date(g.mat); while(d>from){ if(d<=to) out.push(new Date(d)); d=addMonths(d,-6); } return out.reverse();
+}
+function prevNextCoupon(g){ let n=new Date(g.mat); while(addMonths(n,-6)>TODAY) n=addMonths(n,-6); return [addMonths(n,-6), n]; }
+
+/* Per-holding analytics */
+function calc(h){
+  const g=GILT[h.isin]; const r={g, ok:!!g};
+  if(!g) return r;
+  const il = g.type==="IL";
+  const ratio = il ? (Number(h.ratio)||null) : 1;
+  r.il=il; r.ratio=ratio;
+  let price = Number(h.price)||null;
+  if(Number(h.value)>0){
+    r.value=Number(h.value);
+    if(!price && (!il||ratio)) price = r.value/h.units*100/(ratio||1);
+  } else if(price){
+    r.value = h.units*price/100*(ratio||1);
+    if(il && !ratio) r.flag="Index ratio missing – value understated";
+  }
+  r.price=price;
+  r.income = h.units*g.cpn/100*(ratio||1);
+  if(il && !ratio) r.incomeFlag=true;
+  r.running = r.value? r.income/r.value : null;
+  r.ytm = price && (!il||ratio) ? ytm(price, g) : null; // real yield for IL
+  r.redeem = h.units*(ratio||1);
+  return r;
+}
+function ytm(clean, g){
+  const [prev,next]=prevNextCoupon(g);
+  const acc = g.cpn/2 * (TODAY-prev)/(next-prev);
+  const dirty = clean+acc;
+  const cfs=[]; let d=new Date(next);
+  while(d<=g.mat){ cfs.push([yrs(d), g.cpn/2 + (+d===+g.mat?100:0)]); d=addMonths(d,6); }
+  if(!cfs.length) return null;
+  const pv = y => cfs.reduce((s,[t,c])=>s+c/Math.pow(1+y/2,2*t),0);
+  let lo=-0.05, hi=0.25;
+  for(let i=0;i<80;i++){ const m=(lo+hi)/2; if(pv(m)>dirty) lo=m; else hi=m; }
+  return (lo+hi)/2;
+}
+function all(){ return S.holdings.map((h,i)=>Object.assign({h,i},calc(h))); }
+
+/* ---------- Tabs ---------- */
+document.querySelectorAll("#nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("#nav button").forEach(x=>x.classList.toggle("on",x===b));
+  document.querySelectorAll("section.tab").forEach(s=>s.classList.toggle("on",s.id==="t-"+b.dataset.t));
+  try{ localStorage.setItem(KEY+"-tab", b.dataset.t);}catch(e){}
+  render(); window.scrollTo(0,0);
+});
+try{ const t=localStorage.getItem(KEY+"-tab"); if(t){ const b=document.querySelector(`#nav button[data-t="${t}"]`); if(b){ document.querySelectorAll("#nav button").forEach(x=>x.classList.toggle("on",x===b)); document.querySelectorAll("section.tab").forEach(s=>s.classList.toggle("on",s.id==="t-"+t)); } } }catch(e){}
+
+/* ---------- Render: accounts & holdings ---------- */
+function renderAccounts(){
+  const totals={}; all().forEach(x=>{ totals[x.h.acct]=(totals[x.h.acct]||0)+(x.value||0); }); (S.other||[]).forEach(o=>{ totals[o.acct]=(totals[o.acct]||0)+(Number(o.value)||0); });
+  let h=`<thead><tr><th>Account name</th><th>Type</th><th class="num">Value</th><th></th></tr></thead><tbody>`;
+  S.accounts.forEach((a,i)=>{
+    h+=`<tr><td><input data-acc="${i}" data-f="name" value="${esc(a.name)}" style="width:220px"></td>
+    <td><select data-acc="${i}" data-f="type">${["ISA","SIPP","Wrapped","Taxable"].map(t=>`<option ${a.type===t?"selected":""} value="${t}">${t==="Wrapped"?"Wrapped (ISA/SIPP, unsplit)":t}</option>`).join("")}</select></td>
+    <td class="num">${gbp(totals[a.id]||0)}</td>
+    <td>${(totals[a.id]||S.holdings.some(x=>x.acct===a.id)||(S.other||[]).some(o=>o.acct===a.id))?"":`<button class="g noprint" data-delacc="${i}">Remove</button>`}</td></tr>`;
+  });
+  document.getElementById("acctTable").innerHTML=h+"</tbody>";
+}
+function renderOther(){
+  const O=S.other||[]; const el=document.getElementById("otherTable");
+  if(!O.length){ el.innerHTML=`<tbody><tr><td class="muted">None loaded. Load the HL data workbook on tab 1.</td></tr></tbody>`; return; }
+  const kinds={cash:"Cash",mmf:"Money market fund",ilfund:"Index-linked gilt fund",fund:"Fund / share"};
+  let t=0, inc=0;
+  el.innerHTML=`<thead><tr><th>Holding</th><th>Account</th><th>Kind</th><th class="num">Value</th><th class="num">Yield</th></tr></thead><tbody>`+
+    [...O].sort((a,b)=>b.value-a.value).map(o=>{ t+=Number(o.value)||0; inc+=(Number(o.value)||0)*(Number(o.yield)||0)/100; return `<tr><td>${esc(o.name)}</td><td>${esc(acctById(o.acct).name)}</td><td>${kinds[o.kind]||o.kind}</td><td class="num">${gbp(o.value)}</td><td class="num">${o.yield?Number(o.yield).toFixed(2)+"%":"–"}</td></tr>`; }).join("")+
+    `</tbody><tfoot><tr><td colspan="3">Total</td><td class="num">${gbp(t)}</td><td class="num">${gbp(inc)} p.a.</td></tr></tfoot>`;
+}
+function renderHoldings(){
+  const rows=all().sort((a,b)=>(a.g?a.g.mat:0)-(b.g?b.g.mat:0));
+  if(!rows.length){ document.getElementById("holdTable").innerHTML=`<tbody><tr><td class="muted">No holdings yet. On tab 1, load the HL data workbook, a saved planner file, or a gilt yield explorer portfolio.</td></tr></tbody>`; return; }
+  let h=`<thead><tr><th>Gilt</th><th></th><th>Matures</th><th class="num">Nominal</th><th>Account</th><th class="num">Price</th><th class="num">Index ratio</th><th class="num">Value £ (override)</th><th class="num">Value</th><th class="num">Interest p.a.</th><th class="num">Running yield</th><th class="num">Yield to maturity</th></tr></thead><tbody>`;
+  let tv=0, ti=0;
+  rows.forEach(x=>{
+    const g=x.g; if(!g){ h+=`<tr><td colspan="12">Unknown ISIN ${esc(x.h.isin)} (not in the reference list)</td></tr>`; return; }
+    tv+=x.value||0; ti+=x.income||0;
+    h+=`<tr><td>${esc(g.name)}<div class="small muted">${g.isin}</div></td>
+      <td><span class="tag ${g.type}">${g.type==="IL"?"IL":"Conv"}</span></td>
+      <td>${g.mat.toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"})}</td>
+      <td class="num">${x.h.units.toLocaleString("en-GB")}</td>
+      <td><select data-h="${x.i}" data-f="acct">${S.accounts.map(a=>`<option value="${a.id}" ${a.id===x.h.acct?"selected":""}>${esc(a.name)}</option>`).join("")}</select></td>
+      <td class="num"><input class="sm" type="number" step="0.01" data-h="${x.i}" data-f="price" value="${x.h.price??""}"></td>
+      <td class="num">${g.type==="IL"?`<input class="sm" type="number" step="0.00001" data-h="${x.i}" data-f="ratio" value="${x.h.ratio??""}">`:""}</td>
+      <td class="num"><input type="number" step="1" data-h="${x.i}" data-f="value" value="${x.h.value??""}"></td>
+      <td class="num">${gbp(x.value)}${x.flag?`<div class="flag">${x.flag}</div>`:""}</td>
+      <td class="num">${gbp(x.income)}${x.incomeFlag?`<div class="flag">needs index ratio</div>`:""}</td>
+      <td class="num">${pct(x.running)}</td>
+      <td class="num">${x.ytm==null?"–":pct(x.ytm)+(x.il?" real":"")}</td></tr>`;
+  });
+  h+=`</tbody><tfoot><tr><td colspan="8">Total</td><td class="num">${gbp(tv)}</td><td class="num">${gbp(ti)}</td><td class="num">${pct(tv?ti/tv:null)}</td><td></td></tr></tfoot>`;
+  document.getElementById("holdTable").innerHTML=h;
+}
+
+/* ---------- Portfolio summary ---------- */
+function summary(){
+  const A=all().filter(x=>x.g);
+  const s={value:0,wrapped:0,taxed:0,incW:0,incT:0,incISA:0,incSIPP:0,incWU:0,conv:0,il:0,convY:0,ilY:0,missing:0,ilMissing:0};
+  A.forEach(x=>{
+    const v=x.value||0; if(!x.value) s.missing++; if(x.il&&!x.ratio) s.ilMissing++;
+    s.value+=v; const w=isWrapped(x.h); w? s.wrapped+=v : s.taxed+=v;
+    const t=acctById(x.h.acct).type;
+    if(t==="Taxable") s.incT+=x.income; else { s.incW+=x.income; if(t==="ISA") s.incISA+=x.income; else if(t==="SIPP") s.incSIPP+=x.income; else s.incWU+=x.income; }
+    if(x.il){ s.il+=v; if(x.ytm!=null) s.ilY+=v*x.ytm; } else { s.conv+=v; if(x.ytm!=null) s.convY+=v*x.ytm; }
+  });
+  s.gilts=s.value; s.other=0; s.otherIL=0; s.otherCash=0;
+  (S.other||[]).forEach(o=>{ const v=Number(o.value)||0, inc=v*(Number(o.yield)||0)/100; const t=acctById(o.acct).type;
+    s.other+=v; s.value+=v; t==="Taxable"? s.taxed+=v : s.wrapped+=v;
+    if(o.kind==="ilfund") s.otherIL+=v; if(o.kind==="cash"||o.kind==="mmf") s.otherCash+=v;
+    if(t==="Taxable") s.incT+=inc; else { s.incW+=inc; if(t==="ISA") s.incISA+=inc; else if(t==="SIPP") s.incSIPP+=inc; else s.incWU+=inc; } });
+  s.convYield = s.conv? s.convY/s.conv : null;
+  s.ilReal = s.il? s.ilY/s.il : null;
+  return s;
+}
+
+function renderOverview(){
+  const s=summary(); const infl=S.inflation/100;
+  document.getElementById("ovMissing").innerHTML = s.missing||s.ilMissing ? `<div class="note warn">${s.missing} holding(s) have no price or value yet${s.ilMissing?`, and ${s.ilMissing} index-linked holding(s) have no index ratio`:""}. Fill these in on tab 2 for accurate figures.</div>`:"";
+  const exp = s.value? ((s.conv*(s.convYield??0)) + (s.il*((s.ilReal??0)+infl)) + s.other*(S.otherReturn/100))/s.value : null;
+  document.getElementById("ovStats").innerHTML = [
+    ["Total value",gbp(s.value),""],
+    ["Tax-wrapped",gbp(s.wrapped),pct(s.value?s.wrapped/s.value:null,0)+" of total"],
+    ["Taxable",gbp(s.taxed),pct(s.value?s.taxed/s.value:null,0)+" of total"],
+    ["Gilts / other",gbp(s.gilts),gbp(s.other)+" in funds, shares &amp; cash"],
+    ["Income p.a.",gbp(s.incW+s.incT),`<span class="w">${gbp(s.incW)} wrapped</span> · <span class="t">${gbp(s.incT)} taxable</span>`],
+    ["Inflation-protected",pct(s.value?(s.il+s.otherIL)/s.value:null,0),"index-linked gilts &amp; IL gilt funds"],
+    ["Expected return p.a.",pct(exp),"gilts held to maturity, "+S.inflation+"% inflation, "+S.otherReturn+"% on funds"]
+  ].map(([k,v,n])=>`<div class="stat"><div class="k">${k}</div><div class="v">${v}</div><div class="n">${n}</div></div>`).join("");
+  renderLadder(); renderCoupons();
+  document.getElementById("inflation").value=S.inflation; document.getElementById("otherReturn").value=S.otherReturn; document.getElementById("spend2").value=S.spend;
+  // sustainability projection (real terms)
+  let html="";
+  if(!s.value){ html=`<p class="muted">Load the HL workbook or enter prices on tab 2 to see this.</p>`; }
+  else{
+    const realRet = (1+exp)/(1+infl)-1;
+    const outflow=S.spend;
+    const rate = outflow/s.value;
+    let v=s.value, out=null; const marks={};
+    for(let y=1;y<=40;y++){ v = v*(1+realRet) - outflow; if(v<=0&&out==null){out=y;} if([10,20,30,40].includes(y)) marks[y]=Math.max(0,v); }
+    const cls = rate<=realRet ? "ok" : (out && out<30 ? "bad":"warn");
+    html+=`<div class="note ${cls}">Spending ${gbp(S.spend)} a year (rising with inflation) is <b>${pct(rate)}</b> of the portfolio. The expected real return (after inflation) is about <b>${pct(realRet)}</b>. `+
+      (rate<=realRet? "The portfolio should roughly keep its buying power." : `The portfolio will shrink in real terms${out?`, and on these assumptions <b>runs out after about ${out} years</b>`:""}.`)+`</div>`;
+    html+=`<div class="tablewrap"><table><thead><tr><th>After</th>${[10,20,30,40].map(y=>`<th class="num">${y} years</th>`).join("")}</tr></thead><tbody><tr><td>Value in today's money</td>${[10,20,30,40].map(y=>`<td class="num">${gbp(marks[y])}</td>`).join("")}</tr></tbody></table></div>`;
+    html+=`<p class="small muted">Simplified: covers all accounts, including Jamie's. Assumes today's yields are earned each year, conventional gilts are reinvested at similar yields, spending rises with inflation, and tax is ignored. Treat this as a rough guide, not a forecast.</p>`;
+  }
+  document.getElementById("sustain").innerHTML=html;
+}
+function barSVG(cats, series, h=190){
+  const W=Math.max(560,cats.length*22), padL=56, padB=26, padT=8, cw=(W-padL-8)/cats.length;
+  const max=Math.max(1,...cats.map((_,i)=>series.reduce((s,se)=>s+se.vals[i],0)));
+  const nice = (()=>{ const p=Math.pow(10,Math.floor(Math.log10(max))); const m=max/p; return (m<=2?2:m<=5?5:10)*p; })();
+  let svg=`<svg viewBox="0 0 ${W} ${h}" width="100%" style="min-width:${Math.min(W,560)}px" role="img">`;
+  for(let k=0;k<=4;k++){ const y=padT+(h-padT-padB)*(1-k/4); svg+=`<line x1="${padL}" x2="${W-8}" y1="${y}" y2="${y}" stroke="var(--line)"/><text x="${padL-6}" y="${y+4}" text-anchor="end">${gbp(nice*k/4/1000, (nice/4/1000)%1?1:0)}k</text>`; }
+  cats.forEach((c,i)=>{
+    let y0=h-padB;
+    series.forEach(se=>{ const v=se.vals[i]; if(v>0){ const bh=(h-padT-padB)*v/nice; svg+=`<rect x="${padL+i*cw+2}" y="${y0-bh}" width="${Math.max(2,cw-4)}" height="${bh}" fill="${se.color}" rx="2"><title>${c}: ${se.name} ${gbp(v)}</title></rect>`; y0-=bh; } });
+    if(cats.length<=14 || i%2===0) svg+=`<text x="${padL+i*cw+cw/2}" y="${h-8}" text-anchor="middle">${c}</text>`;
+  });
+  return `<div class="tablewrap">${svg}</svg></div>`;
+}
+function renderLadder(){
+  const A=all().filter(x=>x.g); const y0=TODAY.getFullYear(), y1=Math.max(y0+1,...A.map(x=>x.g.mat.getFullYear()));
+  const cats=[], w=[], t=[]; for(let y=y0;y<=y1;y++){ cats.push(String(y).slice(2)==="00"?y:"’"+String(y).slice(2)); w.push(0); t.push(0); }
+  A.forEach(x=>{ const i=x.g.mat.getFullYear()-y0; (isWrapped(x.h)?w:t)[i]+=x.redeem; });
+  document.getElementById("ladder").innerHTML=barSVG(cats,[{name:"Wrapped",vals:w,color:"var(--wrap)"},{name:"Taxable",vals:t,color:"var(--tax)"}]);
+}
+function renderCoupons(){
+  const cats=[], w=Array(12).fill(0), t=Array(12).fill(0);
+  const start=new Date(TODAY.getFullYear(),TODAY.getMonth(),1);
+  for(let m=0;m<12;m++){ const d=addMonths(start,m); cats.push(d.toLocaleDateString("en-GB",{month:"short"})); }
+  const end=addMonths(start,12);
+  all().filter(x=>x.g).forEach(x=>{
+    couponDates(x.g, new Date(TODAY.getTime()-1), end).forEach(d=>{
+      const i=(d.getFullYear()-start.getFullYear())*12+d.getMonth()-start.getMonth();
+      if(i>=0&&i<12) (isWrapped(x.h)?w:t)[i]+= x.income/2 + (+d===+x.g.mat? 0:0);
+    });
+  });
+  document.getElementById("couponChart").innerHTML=barSVG(cats,[{name:"Wrapped",vals:w,color:"var(--wrap)"},{name:"Taxable",vals:t,color:"var(--tax)"}],170);
+}
+
+/* ---------- Pairing: find a high-coupon gilt of similar maturity ---------- */
+function similarHigh(g, notBefore){
+  const il=g.type==="IL";
+  const c=REF.map(r=>GILT[r[0]]).filter(x=>x.mat>(notBefore||TODAY)&&(il? (x.type==="IL"&&x.cpn>g.cpn) : (x.type==="C"&&x.cpn>=HIGH_CPN)));
+  if(!c.length) return g;
+  c.sort((a,b)=>Math.abs(a.mat-g.mat)-Math.abs(b.mat-g.mat) || b.cpn-a.cpn);
+  return c[0];
+}
+
+/* ---------- Income tab ---------- */
+function renderIncome(){
+  ["spend","spendRate","sippDraw","cashWrapped"].forEach(k=>document.getElementById(k).value=S[k]);
+  const s=summary(); const A=all().filter(x=>x.g);
+  const spendableNow = s.incT + Number(S.sippDraw||0);
+  const swapPotential = s.incISA + s.incWU + s.incSIPP; // interest arriving in wrappers each year
+  const topups = A.filter(x=>!isWrapped(x.h)&&x.value&&x.running!=null).map(x=>{
+    const allow=Math.max(0,S.spendRate/100 - x.running)*x.value; return Object.assign(x,{allow});
+  }).filter(x=>x.allow>0).sort((a,b)=>b.allow-a.allow);
+  const topTotal=topups.reduce((t,x)=>t+x.allow,0);
+  const gap = S.spend - spendableNow - swapPotential;
+  let h=`<div class="tablewrap"><table><tbody>
+    <tr><td>Interest &amp; dividends paid into taxable accounts (spend directly; taxable)</td><td class="num">${gbp(s.incT)}</td></tr>
+    <tr><td>Planned SIPP withdrawals (taxed as income)</td><td class="num">${gbp(S.sippDraw||0)}</td></tr>
+    <tr><td>Interest &amp; dividends paid into ISAs/SIPPs, released through the swap (A below)</td><td class="num">${gbp(swapPotential)}</td></tr>
+    <tr><td><b>Still to find from top-up sales</b> (B below)</td><td class="num"><b>${gbp(Math.max(0,gap))}</b></td></tr>
+    <tr><td class="muted">Top-up sales allowed by the rule</td><td class="num muted">${gbp(topTotal)}</td></tr>
+  </tbody></table></div>`;
+  if(s.missing) h+=`<div class="note warn">Some holdings have no price, so these figures are incomplete.</div>`;
+  else if(gap>topTotal) h+=`<div class="note bad">Spending is higher than interest plus the rule allows, by about ${gbp(gap-topTotal)}. You would be spending capital. Consider reducing spending, or accept this knowingly for a limited period.</div>`;
+  else h+=`<div class="note ok">Spending can be covered within the strategy's rules.</div>`;
+  if(s.incSIPP>0) h+=`<p class="small muted">Note: SIPP interest moved out through the swap isn't taxed, but it reduces the money left inside the SIPP. Eventually SIPP money has to come out as taxable withdrawals.</p>`;
+  document.getElementById("incomeSummary").innerHTML=h;
+
+  // swap
+  const cash=Number(S.cashWrapped||0);
+  let sw="";
+  if(cash<=0) sw=`<p class="muted small">Enter the cash sitting in the ISAs/SIPPs to get a suggested swap.</p>`;
+  else{
+    const taxed=A.filter(x=>!isWrapped(x.h)&&x.value&&!x.il).sort((a,b)=>b.value-a.value);
+    if(!taxed.length) sw=`<p class="muted">No priced taxable conventional gilts to sell.</p>`;
+    else{
+      const src=taxed[0]; const buy=similarHigh(src.g);
+      sw=`<ol class="steps">
+        <li>In the <b class="w">ISA/SIPP</b>: buy about <b>${gbp(cash)}</b> of <b>${esc(buy.name)}</b> (${buy.isin}). This is a high-coupon gilt of similar maturity to the one being sold. Keep a little cash back for fees.</li>
+        <li>On the same day, in <b class="t">${esc(acctById(src.h.acct).name)}</b>: sell about <b>${gbp(cash)}</b> of <b>${esc(src.g.name)}</b>, roughly ${Math.round(cash/(src.value/src.h.units)).toLocaleString("en-GB")} nominal at today's price.</li>
+        <li>The taxable sale proceeds are now free to spend. Overall, the family still owns about the same amount of gilts, just with more of it inside the wrappers.</li></ol>
+        <p class="small muted">The suggestion pairs with your largest taxable holding. Any similar-maturity pair works.</p>`;
+    }
+  }
+  document.getElementById("swapTable").innerHTML=sw;
+
+  // topups
+  let tt="";
+  if(!topups.length) tt=`<p class="muted small">No taxable holdings are priced yet, or none has a running yield below ${S.spendRate}%.</p>`;
+  else{
+    tt=`<div class="tablewrap"><table><thead><tr><th>Gilt</th><th>Account</th><th class="num">Value</th><th class="num">Running yield</th><th class="num">May sell this year</th><th class="num">≈ Nominal</th></tr></thead><tbody>`+
+      topups.map(x=>`<tr><td>${esc(x.g.name)}</td><td>${esc(acctById(x.h.acct).name)}</td><td class="num">${gbp(x.value)}</td><td class="num">${pct(x.running)}</td><td class="num">${gbp(x.allow)}</td><td class="num">${Math.round(x.allow/(x.value/x.h.units)).toLocaleString("en-GB")}</td></tr>`).join("")+
+      `</tbody><tfoot><tr><td colspan="4">Total available</td><td class="num">${gbp(topTotal)}</td><td></td></tr></tfoot></table></div>
+      <p class="small muted">Only sell what's needed, starting from the top of the list. Spread sales through the year rather than doing them all at once.</p>`;
+  }
+  document.getElementById("topupTable").innerHTML=tt;
+}
+
+/* ---------- April tab ---------- */
+function renderApril(){
+  document.getElementById("planDate").value=S.planDate;
+  let p=`<thead><tr><th>Person</th><th class="num">ISA subscription £</th><th class="num">SIPP contribution £ (net)</th><th>Funded by a gift from parents</th><th></th></tr></thead><tbody>`;
+  S.people.forEach((x,i)=>{ p+=`<tr><td><input data-p="${i}" data-f="name" value="${esc(x.name)}" style="width:140px"></td><td class="num"><input type="number" step="1000" data-p="${i}" data-f="isa" value="${x.isa}"></td><td class="num"><input type="number" step="500" data-p="${i}" data-f="sipp" value="${x.sipp}"></td><td><input type="checkbox" data-p="${i}" data-f="gift" ${x.gift?"checked":""}></td><td><button class="g noprint" data-delp="${i}">Remove</button></td></tr>`; });
+  const T=S.people.reduce((t,x)=>t+Number(x.isa||0)+Number(x.sipp||0),0);
+  p+=`</tbody><tfoot><tr><td>Total to move</td><td colspan="2" class="num">${gbp(T)}</td><td colspan="2"></td></tr></tfoot>`;
+  document.getElementById("peopleTable").innerHTML=p;
+
+  const pd=new Date(S.planDate+"T00:00:00"); const A=all().filter(x=>x.g);
+  const bridge=A.filter(x=>isWrapped(x.h)&&x.g.mat<=addMonths(pd,1)&&x.g.mat>=addMonths(pd,-12)&&x.g.mat>=TODAY);
+  const bridgeAmt=bridge.reduce((t,x)=>t+x.redeem,0)+Number(S.cashWrapped||0);
+  const taxed=A.filter(x=>!isWrapped(x.h)&&x.value&&x.g.mat>addMonths(pd,24)).sort((a,b)=>b.g.mat-a.g.mat);
+  // allocation of sells: user overrides else proportional to value
+  // default: concentrate sales in the largest conventional holdings (≤25% of each), then index-linked
+  const giftees=S.people.filter(x=>x.gift).map(x=>String(x.name).toLowerCase());
+  const order=[...taxed].filter(x=>!giftees.includes(String(acctById(x.h.acct).owner||"").toLowerCase())).sort((a,b)=>(a.il-b.il)||(b.value-a.value)); let rem=T; const auto={};
+  order.forEach(x=>{ const a=Math.min(rem, Math.floor(x.value*0.25/500)*500); if(a>=1000){ auto[x.i]=a; rem-=a; } });
+  const sells=taxed.map(x=>{ const k=x.h.isin+"|"+x.i; const user=S.sellAlloc[k]; const amt = user!=null&&user!=="" ? Number(user) : (auto[x.i]||0); return Object.assign(x,{k,amt,user:user!=null&&user!==""}); });
+  const sellTot=sells.reduce((t,x)=>t+x.amt,0);
+  const nextBridgeEnd=addMonths(pd,12), nextBridgeStart=addMonths(pd,7);
+  const cand=REF.map(r=>GILT[r[0]]).filter(g=>g.type==="C"&&g.mat>=nextBridgeStart&&g.mat<=addMonths(nextBridgeEnd,0)).sort((a,b)=>b.cpn-a.cpn);
+  const nb=cand[0];
+
+  let h=`<h2>Plan for the tax year starting ${pd.toLocaleDateString("en-GB",{day:"numeric",month:"long",year:"numeric"})}</h2>`;
+  h+=`<h3>Step 1 · Cash available inside the wrappers at the start of the tax year</h3>`;
+  h+= bridge.length? `<div class="tablewrap"><table><thead><tr><th>Wrapped gilt maturing around then</th><th>Account</th><th>Matures</th><th class="num">Repays</th></tr></thead><tbody>${bridge.map(x=>`<tr><td>${esc(x.g.name)}</td><td>${esc(acctById(x.h.acct).name)}</td><td>${x.g.mat.toLocaleDateString("en-GB")}</td><td class="num">${gbp(x.redeem)}</td></tr>`).join("")}</tbody></table></div>`:`<p class="muted small">No wrapped gilts mature in the 12 months up to this date.</p>`;
+  h+=`<p>Plus cash already in the wrappers (tab 4): ${gbp(S.cashWrapped||0)}. <b>Total available: ${gbp(bridgeAmt)}</b>.</p>`;
+  if(bridgeAmt<T) h+=`<div class="note warn">That's ${gbp(T-bridgeAmt)} less than the ${gbp(T)} you plan to move. You can still do the move: sell in the taxable account first, transfer the cash, then buy in the wrapper a few days later. You'll just be out of the market for those few days.</div>`;
+  else h+=`<div class="note ok">There's enough cash inside the wrappers to buy straight away, on the same day as the taxable sales.</div>`;
+
+  h+=`<h3>Step 2 · On or soon after 6 April: sell in taxable, buy the same amount in the wrappers</h3>`;
+  if(!sells.length) h+=`<p class="muted">No priced taxable gilts maturing more than two years out. Enter prices on tab 2.</p>`;
+  else{
+    h+=`<p class="small muted">The app suggests selling from your largest longer-dated conventional holdings first (no more than a quarter of any one holding), so there are only a few trades. It doesn't sell from the accounts of anyone ticked as receiving a gift, because that money is theirs. Change any amount to suit, or clear a box to go back to the suggestion. Each wrapped purchase is a <b>higher-coupon</b> gilt of similar maturity (index-linked swapped for index-linked), which makes better use of the tax shelter than the low-coupon one being sold.</p>
+    <div class="tablewrap"><table><thead><tr><th>Sell (taxable)</th><th>From</th><th class="num">Value held</th><th class="num">Sell £</th><th>Buy in ISA/SIPP instead</th></tr></thead><tbody>`+
+    [...sells].sort((a,b)=>(b.amt>0)-(a.amt>0)).map((x,ix,arr)=>{ const b=similarHigh(x.g); const first0 = x.amt<=0 && (ix===0||arr[ix-1].amt>0); return (first0?`<tr><td colspan="5" class="small muted" style="padding-top:12px">Other taxable holdings you could sell from instead (type an amount to use one):</td></tr>`:"")+ `<tr><td>${esc(x.g.name)}</td><td>${esc(acctById(x.h.acct).name)}</td><td class="num">${gbp(x.value)}</td><td class="num"><input type="number" step="500" data-sell="${esc(x.k)}" value="${x.user?x.amt:""}" placeholder="${x.user?"":x.amt}"></td><td>${x.amt>0?esc(b.name)+` <span class="small muted">${b.isin}</span>`:""}</td></tr>`; }).join("")+
+    `</tbody><tfoot><tr><td colspan="3">Total</td><td class="num">${gbp(sellTot)}</td><td>${Math.abs(sellTot-T)>500?`<span class="flag">Differs from target ${gbp(T)}</span>`:""}</td></tr></tfoot></table></div>`;
+  }
+  h+=`<h3>Step 3 · Move the cash raised into the wrappers</h3><ul>`+
+    S.people.filter(x=>x.isa>0||x.sipp>0).map(x=>`<li><b>${esc(x.name)}</b>: ${x.gift?`receives a gift of ${gbp(Number(x.isa||0)+Number(x.sipp||0))} from the cash raised in Step 2 (Richard or Yvonne pays it to his bank account), then pays`:"pay"} ${gbp(x.isa)} into their ISA${x.sipp>0?`, and ${gbp(x.sipp)} into their SIPP (the provider usually adds 20% basic-rate tax relief on top; higher-rate relief is claimed on the tax return)`:""}.</li>`).join("")+
+    `</ul><p class="small muted">Money can only go into a person's own ISA/SIPP, and it must come from their own money (or a gift to them). A SIPP payment of £2,700 net becomes £3,375 once basic-rate relief is added. That is within the £2,880 net limit for someone with no earnings. Keep a record of each gift (date, amount, from whom) for Inheritance Tax.</p>`;
+  h+=`<h3>Step 4 · Set up next year's cash, inside the wrappers</h3>`;
+  h+= nb? `<p>Use the cash just paid in to buy about <b>${gbp(T)}</b> of <b>${esc(nb.name)}</b> (${nb.isin}, matures ${nb.mat.toLocaleDateString("en-GB")}). It will repay in time for next year's move.</p>`:`<p class="muted">No conventional gilt matures between ${nextBridgeStart.toLocaleDateString("en-GB")} and ${nextBridgeEnd.toLocaleDateString("en-GB")}. Use a money-market fund held alongside gilts in the ISA instead.</p>`;
+  h+=`<div class="note info">Before trading: check live prices on the platform, check that each gilt is available in that account, and keep the contract notes for the tax return (Accrued Income Scheme).</div>`;
+  document.getElementById("aprilPlan").innerHTML=h;
+}
+
+/* ---------- Events ---------- */
+function render(){
+  const on=document.querySelector("section.tab.on").id;
+  if(on==="t-holdings"){ renderAccounts(); renderHoldings(); renderOther(); }
+  if(on==="t-overview") renderOverview();
+  if(on==="t-income") renderIncome();
+  if(on==="t-april") renderApril();
+}
+document.addEventListener("change",e=>{
+  const el=e.target, d=el.dataset; let touched=true;
+  const num = v => v===""?null:Number(v);
+  if(d.h!=null){ const h=S.holdings[+d.h]; h[d.f]= d.f==="acct"? el.value : num(el.value); }
+  else if(d.acc!=null){ S.accounts[+d.acc][d.f]=el.value; }
+  else if(d.p!=null){ S.people[+d.p][d.f]= d.f==="name"? el.value : d.f==="gift"? el.checked : (num(el.value)||0); }
+  else if(d.sell!=null){ if(el.value==="") delete S.sellAlloc[d.sell]; else S.sellAlloc[d.sell]=Number(el.value); }
+  else if(["spend","spendRate","sippDraw","cashWrapped","inflation","planDate","otherReturn"].includes(el.id)){ S[el.id]= el.id==="planDate"? el.value : (num(el.value)||0); }
+  else if(el.id==="spend2"){ S.spend=num(el.value)||0; }
+  else touched=false;
+  if(touched){ persist(); render(); }
+});
+document.addEventListener("click",e=>{
+  const d=e.target.dataset;
+  if(d.delacc!=null){ S.accounts.splice(+d.delacc,1); persist(); render(); }
+  if(d.delp!=null){ S.people.splice(+d.delp,1); persist(); render(); }
+});
+document.getElementById("addAcct").onclick=()=>{ S.accounts.push({id:"a"+Date.now(),name:"New account",type:"Taxable"}); persist(); render(); };
+document.getElementById("addPerson").onclick=()=>{ S.people.push({name:"Name",isa:20000,sipp:0,gift:false}); persist(); render(); };
+document.getElementById("pasteBtn").onclick=()=>{
+  let n=0, bad=[];
+  document.getElementById("pasteBox").value.split(/\n/).forEach(line=>{
+    const p=line.trim().split(/[\s,;\t]+/).filter(Boolean); if(!p.length) return;
+    const isin=p[0].toUpperCase(); const price=parseFloat(p[1]); const ratio=p[2]!=null?parseFloat(p[2]):null;
+    const hs=S.holdings.filter(h=>h.isin===isin);
+    if(!hs.length||isNaN(price)){ bad.push(p[0]); return; }
+    hs.forEach(h=>{ h.price=price; if(ratio&&!isNaN(ratio)) h.ratio=ratio; h.value=null; }); n++;
+  });
+  document.getElementById("pasteMsg").textContent=`Updated ${n} gilt(s).`+(bad.length?` Not matched: ${bad.join(", ")}`:"");
+  persist(); render();
+};
+document.getElementById("saveBtn").onclick=()=>{
+  const blob=new Blob([JSON.stringify(Object.assign({app:"savings-strategy-planner",saved:iso(new Date())},S),null,1)],{type:"application/json"});
+  const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download="savings-planner-"+iso(new Date())+".json"; document.body.appendChild(a); a.click(); a.remove();
+};
+document.getElementById("loadFile").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return; const r=new FileReader();
+  r.onload=()=>{ try{
+    const j=JSON.parse(r.result);
+    if(j.app==="savings-strategy-planner"){ delete j.app; delete j.saved; S=Object.assign(freshState(),j); msg("Loaded saved planner data from "+f.name+"."); }
+    else if(Array.isArray(j.holdings)){ S.holdings=holdingsFrom(j,S.holdings); msg(`Loaded ${j.holdings.length} holdings from the gilt explorer file. Account choices and prices were kept where the gilt was already held.`); }
+    else msg("That file wasn't recognised.");
+    persist(); render();
+  }catch(err){ msg("Couldn't read that file."); } };
+  r.readAsText(f); e.target.value="";
+};
+/* ---------- Latest prices from the gilt yield explorer ---------- */
+const PRICE_URLS=["./gilt_latest.json","https://richardcooper715-rgb.github.io/gilt-yield-explorer/gilt_latest.json"];
+function nextBiz(d){ const r=new Date(d); do{ r.setDate(r.getDate()+1); }while(r.getDay()===0||r.getDay()===6); return r; }
+function bizDaysBefore(d,n){ const r=new Date(d); while(n>0){ r.setDate(r.getDate()-1); if(r.getDay()!==0&&r.getDay()!==6) n--; } return r; }
+function accruedAt(g, tradeDate){ // per £100 nominal (real terms for index-linked); negative when ex-dividend
+  const settle=nextBiz(tradeDate); let n=new Date(g.mat); if(settle>=n) return 0;
+  while(addMonths(n,-6)>settle) n=addMonths(n,-6);
+  const last=addMonths(n,-6), days=(n-last)/864e5;
+  if(settle>=bizDaysBefore(n,7)) return -(g.cpn/2)*((n-settle)/864e5)/days;
+  return (g.cpn/2)*((settle-last)/864e5)/days;
+}
+function priceMsg(t){ const el=document.getElementById("priceMsg"); if(el) el.textContent=t; }
+async function loadMarketPrices(silent){
+  if(!S.holdings.length){ if(!silent) priceMsg("Load your holdings first (tab 1)."); return ""; }
+  let data=null;
+  for(const u of PRICE_URLS){ try{ const r=await fetch(u,{cache:"no-cache"}); if(r.ok){ data=await r.json(); break; } }catch(e){} }
+  if(!data||!Array.isArray(data.securities)){ const t="Couldn't reach the gilt explorer's price file. Prices are unchanged. You can still paste prices below."; if(!silent) priceMsg(t); return ""; }
+  const by={}; data.securities.forEach(x=>by[x.isin]=x);
+  const anchors=data.il_index_ratio_anchors||{}, ratios=anchors.ratios||{};
+  let n=0; const dates=[], missing=new Set();
+  S.holdings.forEach(h=>{
+    const g=GILT[h.isin], q=by[h.isin];
+    if(!g||!q||q.dirty_price==null){ if(g) missing.add(g.name); return; }
+    const ai=accruedAt(g,new Date(q.date+"T00:00:00"));
+    if(g.type==="IL"){ const r=ratios[h.isin]; if(!r){ missing.add(g.name); return; } h.ratio=+Number(r).toFixed(5); h.price=+(q.dirty_price/r-ai).toFixed(4); }
+    else h.price=+(q.dirty_price-ai).toFixed(4);
+    h.value=null; n++; dates.push(q.date);
+  });
+  dates.sort(); S.pricesAsOf=dates[dates.length-1]||null; persist(); render();
+  const fmt=d=>new Date(d+"T00:00:00").toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"});
+  const t=`Updated ${n} holdings: prices as at ${dates.length?fmt(dates[dates.length-1]):"–"}${dates.length&&dates[0]!==dates[dates.length-1]?` (oldest ${fmt(dates[0])})`:""}${anchors.settlement_date?`, index ratios as at ${fmt(anchors.settlement_date)}`:""}.`+(missing.size?` No price for: ${[...missing].join(", ")}.`:"");
+  priceMsg(t); return t;
+}
+document.getElementById("priceBtn").onclick=()=>{ priceMsg("Fetching…"); loadMarketPrices(false); };
+
+/* ---------- Minimal .xlsx reader (no external libraries) ---------- */
+async function readXlsx(buf){
+  const dv=new DataView(buf), u8=new Uint8Array(buf);
+  let eocd=-1; for(let i=u8.length-22;i>=Math.max(0,u8.length-66000);i--){ if(dv.getUint32(i,true)===0x06054b50){ eocd=i; break; } }
+  if(eocd<0) throw new Error("not an .xlsx file");
+  const n=dv.getUint16(eocd+10,true); let off=dv.getUint32(eocd+16,true); const files={};
+  for(let k=0;k<n;k++){
+    if(dv.getUint32(off,true)!==0x02014b50) break;
+    const method=dv.getUint16(off+10,true), csize=dv.getUint32(off+20,true), nl=dv.getUint16(off+28,true), el=dv.getUint16(off+30,true), cl=dv.getUint16(off+32,true), lo=dv.getUint32(off+42,true);
+    const name=new TextDecoder().decode(u8.subarray(off+46,off+46+nl));
+    files[name]={method,csize,lo}; off+=46+nl+el+cl;
+  }
+  async function text(name){
+    const f=files[name]; if(!f) return null;
+    const ln=dv.getUint16(f.lo+26,true), le=dv.getUint16(f.lo+28,true); const data=u8.subarray(f.lo+30+ln+le, f.lo+30+ln+le+f.csize);
+    if(f.method===0) return new TextDecoder().decode(data);
+    const stream=new Blob([data]).stream().pipeThrough(new DecompressionStream("deflate-raw"));
+    return await new Response(stream).text();
+  }
+  const xml=async n=>{ const t=await text(n); return t? new DOMParser().parseFromString(t,"application/xml") : null; };
+  const tagAll=(doc,tag)=>Array.from(doc.getElementsByTagNameNS("*",tag));
+  const shared=[]; const ss=await xml("xl/sharedStrings.xml");
+  if(ss) tagAll(ss,"si").forEach(si=>shared.push(tagAll(si,"t").map(t=>t.textContent).join("")));
+  const wbx=await xml("xl/workbook.xml"), rels=await xml("xl/_rels/workbook.xml.rels");
+  const relMap={}; tagAll(rels,"Relationship").forEach(r=>relMap[r.getAttribute("Id")]=r.getAttribute("Target"));
+  const sheets={}, names=[];
+  tagAll(wbx,"sheet").forEach(sh=>{ const id=sh.getAttribute("r:id")||sh.getAttributeNS("http://schemas.openxmlformats.org/officeDocument/2006/relationships","id"); let t=relMap[id]||""; t=t.startsWith("/")?t.slice(1):"xl/"+t.replace(/^\.\//,""); names.push(sh.getAttribute("name")); sheets[sh.getAttribute("name")]=t; });
+  const colIdx=ref=>{ let c=0; for(const ch of ref.replace(/\d+/g,"")) c=c*26+(ch.charCodeAt(0)-64); return c-1; };
+  const cache={};
+  return { SheetNames:names, rows: async sn=>{
+    if(cache[sn]) return cache[sn];
+    const doc=await xml(sheets[sn]); const out=[];
+    if(doc) tagAll(doc,"row").forEach(r=>{ const ri=Number(r.getAttribute("r"))-1; const row=out[ri]=[];
+      tagAll(r,"c").forEach(c=>{ const t=c.getAttribute("t"); const v=c.getElementsByTagNameNS("*","v")[0]; let val=null;
+        if(t==="s") val=v? shared[Number(v.textContent)] : null;
+        else if(t==="inlineStr") val=tagAll(c,"t").map(x=>x.textContent).join("");
+        else if(t==="str"||t==="e") val=v? v.textContent : null;
+        else if(t==="b") val=v? v.textContent==="1" : null;
+        else val=v&&v.textContent!==""? Number(v.textContent) : null;
+        row[colIdx(c.getAttribute("r"))]=val; }); });
+    for(let i=0;i<out.length;i++){ if(!out[i]) out[i]=[]; for(let j=0;j<out[i].length;j++) if(out[i][j]===undefined) out[i][j]=null; }
+    return cache[sn]=out; } };
+}
+
+/* ---------- HL data workbook import ---------- */
+function matchGilt(code,name,isin){
+  if(isin && GILT[String(isin).trim()]) return GILT[String(isin).trim()];
+  if(code!=null){ const c=String(code).trim().padStart(7,"0"); const hit=REF.find(r=>r[0].slice(4,11)===c); if(hit) return GILT[hit[0]]; }
+  name=String(name||"");
+  if(!/treasury|govt|gilt/i.test(name)) return null;
+  const dm=name.match(/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/); if(!dm) return null;
+  const yr=dm[3].length===2? 2000+Number(dm[3]) : Number(dm[3]);
+  const mat=iso(new Date(yr,Number(dm[2])-1,Number(dm[1])));
+  const il=/idx|index|\bil\b|linked/i.test(name);
+  const cands=REF.filter(r=>r[3]===mat && (r[4]==="IL")===il);
+  if(cands.length===1) return GILT[cands[0][0]];
+  const cm=name.match(/(\d+(?:\.\d+)?)\s*%/);
+  if(cm){ const c=cands.find(r=>Math.abs(r[2]-Number(cm[1]))<0.01); if(c) return GILT[c[0]]; }
+  return null;
+}
+async function importHL(wb){
+  const R={}; for(const sn of wb.SheetNames) R[sn]=await wb.rows(sn);
+  const rowsOf=sn=>R[sn];
+  const ratios={};
+  wb.SheetNames.filter(n=>/ratio/i.test(n)).forEach(sn=>rowsOf(sn).forEach(r=>{ const i=r&&typeof r[1]==="string"?r[1].trim():null; if(i&&GILT[i]&&typeof r[2]==="number") ratios[i]=r[2]; }));
+  const accounts=defaultAccounts(), holdings=[], other=[], unmatched=[];
+  wb.SheetNames.forEach(sn=>{
+    if(/^family$/i.test(sn)) return;
+    const rows=rowsOf(sn);
+    const hi=rows.findIndex(r=>r&&r[0]==="Code"&&r[1]==="Stock");
+    const bi=rows.findIndex(r=>r&&r[0]==="Investment"&&r[1]==="Identifier");
+    const cn0=rows.find(r=>r&&r[0]==="Client Name:");
+    if((hi<0||!cn0)&&bi<0) return; // only platform export sheets (HL: has a Client Name row; Barclays: Investment/Identifier)
+    const title=String((rows[0]||[])[0]||sn).trim();
+    const cn=rows.find(r=>r&&r[0]==="Client Name:");
+    const owner=cn? String(cn[1]||"").replace(/^(Mr|Mrs|Ms|Miss|Dr)\.?\s+/i,"").split(/\s+/)[0] : "";
+    let type="Taxable"; if(/\bISA\b/i.test(title)) type="ISA"; else if(/SIPP|pension/i.test(title)) type="SIPP";
+    let acct=accounts.find(a=>a.id===sn);
+    if(!acct){ acct={id:sn,name:(owner?owner+" ":"")+(bi>=0?"Barclays account":title),type}; accounts.push(acct); }
+    else if(hi>=0) acct.type=type;
+    if(owner) acct.owner=owner; else if(!acct.owner) acct.owner=acct.name.split(" ")[0];
+    for(let k=(hi>=0?hi:bi)+1;k<rows.length;k++){
+      const r=rows[k]; if(!r||r.every(v=>v==null||v==="")) continue;
+      let code,name,isin=null,units,price,value,yld=null;
+      if(hi>=0){ [code,name,yld,,value,units,price]=r; }
+      else { [name,isin,units,,,,,,price,value]=r; code=null; }
+      if(name==null&&code==null) continue;
+      value=Number(value)||0; units=Number(units)||0; price=Number(price)||null;
+      const g=matchGilt(code==="Cash"?null:code,name,isin);
+      if(g){
+        const il=g.type==="IL";
+        holdings.push({isin:g.isin,units,acct:sn,price: il?null:price, ratio: il?(ratios[g.isin]||null):null, value: il? (value||null) : null});
+      } else if(String(code)==="Cash"||/^cash$/i.test(String(name))){
+        if(value) other.push({acct:sn,name:"Cash",value,kind:"cash",yield:0});
+      } else if(value>0){
+        if(/treasury|govt|gilt/i.test(String(name))&&!/fund|etf|ucits/i.test(String(name))) unmatched.push(String(name));
+        const nm=String(name);
+        const kind=/money|mmf|liquidity/i.test(nm)?"mmf":/index-linked gilt/i.test(nm)?"ilfund":"fund";
+        other.push({acct:sn,name:nm.replace(/\s*\*\d(\s*\*\d)*\s*$/,""),value,kind,yield:Number(yld)||0});
+      }
+    }
+  });
+  return {accounts,holdings,other,unmatched,nRatios:Object.keys(ratios).length};
+}
+document.getElementById("loadHL").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  if(typeof DecompressionStream==="undefined"){ msg("This browser is too old to read .xlsx files. Please use an up-to-date Chrome, Edge, Safari or Firefox."); return; }
+  const r=new FileReader();
+  r.onload=async ()=>{ try{
+    const wb=await readXlsx(r.result);
+    const res=await importHL(wb);
+    if(!res.holdings.length&&!res.other.length){ msg("No HL or Barclays holdings sheets were found in "+f.name+"."); return; }
+    S.accounts=res.accounts; S.holdings=res.holdings; S.other=res.other; S.sellAlloc={};
+    S.cashWrapped=Math.round(res.other.filter(o=>o.kind==="cash"&&acctById(o.acct).type!=="Taxable").reduce((t,o)=>t+o.value,0));
+    persist(); render();
+    const pm=await loadMarketPrices(true);
+    const gv=all().reduce((t,x)=>t+(x.value||0),0), ov=res.other.reduce((t,o)=>t+o.value,0);
+    msg(`Loaded ${f.name}: ${res.holdings.length} gilt holdings (${gbp(gv)}) and ${res.other.length} other holdings (${gbp(ov)}) across ${new Set(res.holdings.map(h=>h.acct).concat(res.other.map(o=>o.acct))).size} accounts.`+(pm? " Gilt prices then refreshed from the gilt explorer: "+pm : ` Using the workbook's prices (the gilt explorer's price file couldn't be reached), with index ratios for ${res.nRatios} index-linked gilts.`)+(res.unmatched.length?` Not recognised as gilts: ${res.unmatched.join("; ")}.`:""));
+  }catch(err){ console.error(err); msg("Couldn't read that workbook: "+err.message); } };
+  r.readAsArrayBuffer(f); e.target.value="";
+};
+function msg(t){ document.getElementById("loadMsg").textContent=t; }
+document.getElementById("printBtn").onclick=()=>window.print();
+document.getElementById("resetBtn").onclick=()=>{ if(confirm("Clear all holdings and settings from this browser? Save a copy first if you need one.")){ S=freshState(); persist(); render(); msg("Cleared."); } };
+render();
+try{ if(/^https?:/.test(location.protocol) && S.holdings.length) loadMarketPrices(true); }catch(e){}
+</script>
+</body>
+</html>

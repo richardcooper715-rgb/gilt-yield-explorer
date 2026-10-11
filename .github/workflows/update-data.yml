@@ -94,10 +94,10 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- gilt_yields.json; then
-            echo "No changes to gilt_yields.json -- nothing to commit."
+          if [ -z "$(git status --porcelain -- gilt_yields.json gilt_latest.json)" ]; then
+            echo "No changes to gilt_yields.json / gilt_latest.json -- nothing to commit."
           else
-            git add gilt_yields.json
+            git add gilt_yields.json gilt_latest.json
             git commit -m "Auto-update gilt yield data ($(date -u +%Y-%m-%d))"
             git pull --rebase origin main
             git push
