@@ -103,7 +103,7 @@ svg text{fill:var(--muted);font-size:11px}
   <div class="card">
     <h2>How to use this</h2>
     <ol class="steps">
-      <li><b>Load the platform downloads</b> (button below). You can pick several files at once: each raw HL account download, the Barclays download, or the combined HL data workbook. Each file updates only the accounts it contains, so you can also refresh one account on its own. Funds, shares and cash are included in the totals.</li>
+      <li><b>Load the platform downloads</b> (button below). You can pick several files at once: each raw HL account download, the Barclays download, or the combined HL data workbook. Each file updates only the accounts it contains, so you can also refresh one account on its own. Funds, shares and cash are included in the totals. Between full downloads, a single HL watchlist download (tab 2) refreshes the prices of funds and shares.</li>
       <li><b>Holdings &amp; prices:</b> check the holdings. Prices update automatically from the gilt yield explorer whenever you open the app online, or press "Update prices" on tab 2. Otherwise, tell the app which account each gilt is in, then enter today's price (from your platform or the gilt yield explorer). If you're not sure, the value shown on the platform statement can be typed in instead.</li>
       <li><b>Overview:</b> check the totals, how much is tax-wrapped and how much is taxable, and whether planned spending looks sustainable.</li>
       <li><b>Income for the year:</b> set how much you want to spend. The app shows how much comes from gilt interest and how much to raise by selling small amounts of low-coupon gilts.</li>
@@ -112,7 +112,7 @@ svg text{fill:var(--muted);font-size:11px}
     </ol>
     <div class="row noprint">
       <button class="g" id="saveBtn">Save my data (file)</button>
-      <label class="b">Load HL / Barclays files (.xlsx or .csv, several at once)<input type="file" id="loadHL" accept=".xlsx,.xlsm,.csv,text/csv" multiple hidden></label>
+      <label class="b">Load HL / Barclays files (.xls, .xlsx or .csv, several at once)<input type="file" id="loadHL" accept=".xls,.xlsx,.xlsm,.csv,text/csv" multiple hidden></label>
       <label class="g">Load saved data / gilt explorer portfolio<input type="file" id="loadFile" accept=".json,application/json" hidden></label>
       <button class="g" id="printBtn">Print this page</button>
       <button class="g" id="resetBtn">Clear all data</button>
@@ -130,7 +130,11 @@ svg text{fill:var(--muted);font-size:11px}
   <div class="card noprint">
     <h2>Latest prices</h2>
     <p class="small muted">Prices come from the gilt yield explorer's daily data (Tradeweb and HL), which updates automatically every afternoon. Index-linked gilts use the explorer's latest DMO index ratios.</p>
-    <div class="row"><button class="b" id="priceBtn">Update prices from the gilt explorer</button><span class="small muted" id="priceMsg"></span></div>
+    <div class="row"><button class="b" id="priceBtn">Update gilt prices from the gilt explorer</button><span class="small muted" id="priceMsg"></span></div>
+    <h3>Funds, shares &amp; other holdings</h3>
+    <p class="small muted">Load a single HL price download, such as your watchlist (.xls, .xlsx or .csv), to update the prices of everything that isn't a gilt. Gilts keep the gilt explorer's prices. The app also checks that the units in the download match your account files, which shows whether any account file is out of date.</p>
+    <div class="row"><label class="g">Load price update (e.g. HL watchlist)<input type="file" id="loadPrices" accept=".xls,.xlsx,.csv,text/csv" hidden></label></div>
+    <p class="small muted" id="priceSheetMsg"></p>
   </div>
   <div class="card">
     <h2>Accounts</h2>
@@ -145,7 +149,7 @@ svg text{fill:var(--muted);font-size:11px}
   </div>
   <div class="card">
     <h2>Funds, shares &amp; cash</h2>
-    <p class="small muted">Taken from the HL workbook and included in the totals. The strategy itself only trades gilts, so these are shown for completeness.</p>
+    <p class="small muted">Taken from your account files and included in the totals. The strategy itself only trades gilts, so these are shown for completeness. <span id="otherAsOf"></span></p>
     <div class="tablewrap"><table id="otherTable"></table></div>
   </div>
   <div class="card noprint">
@@ -489,6 +493,7 @@ function renderAccounts(){
 }
 function renderOther(){
   const O=S.other||[]; const el=document.getElementById("otherTable");
+  document.getElementById("otherAsOf").textContent=S.otherPricesAsOf?`Prices updated at ${S.otherPricesAsOf}.`:"";
   if(!O.length){ el.innerHTML=`<tbody><tr><td class="muted">None loaded. Load your HL and Barclays downloads on tab 1.</td></tr></tbody>`; return; }
   const kinds={cash:"Cash",mmf:"Money market fund",ilfund:"Index-linked gilt fund",fund:"Fund / share"};
   let t=0, inc=0;
@@ -807,6 +812,78 @@ async function loadMarketPrices(silent){
 }
 document.getElementById("priceBtn").onclick=()=>{ priceMsg("Fetching…"); loadMarketPrices(false); };
 
+/* ---------- Minimal old-style .xls (BIFF8) reader (no external libraries) ---------- */
+function readCFBStream(buf, names){
+  const dv=new DataView(buf), u8=new Uint8Array(buf);
+  if(dv.getUint32(0,true)!==0xE011CFD0) throw new Error("not an .xls file");
+  const ss=1<<dv.getUint16(30,true), mss=1<<dv.getUint16(32,true);
+  const nFat=dv.getUint32(44,true), dirStart=dv.getUint32(48,true), cutoff=dv.getUint32(56,true), miniFatStart=dv.getUint32(60,true), difatStart=dv.getUint32(68,true), nDifat=dv.getUint32(72,true);
+  const off=s=>(s+1)*ss;
+  const difat=[]; for(let i=0;i<109;i++) difat.push(dv.getUint32(76+i*4,true));
+  let d=difatStart; for(let k=0;k<nDifat&&d<0xFFFFFFFA;k++){ for(let i=0;i<ss/4-1;i++) difat.push(dv.getUint32(off(d)+i*4,true)); d=dv.getUint32(off(d)+ss-4,true); }
+  const fat=[]; for(let i=0;i<nFat;i++){ const s=difat[i]; for(let j=0;j<ss/4;j++) fat.push(dv.getUint32(off(s)+j*4,true)); }
+  const chain=(start,tbl)=>{ const out=[]; let s=start, g=0; while(s<0xFFFFFFFA&&s<tbl.length+1&&g++<5e6){ out.push(s); s=tbl[s]; } return out; };
+  const readChain=(start,size)=>{ const secs=chain(start,fat); const out=new Uint8Array(secs.length*ss); secs.forEach((s,i)=>out.set(u8.subarray(off(s),off(s)+ss),i*ss)); return size!=null? out.subarray(0,size): out; };
+  const dir=readChain(dirStart), ddv=new DataView(dir.buffer,dir.byteOffset,dir.byteLength);
+  const entries=[]; for(let o=0;o+128<=dir.length;o+=128){ const nl=ddv.getUint16(o+64,true); let name=""; for(let i=0;i<nl/2-1;i++) name+=String.fromCharCode(ddv.getUint16(o+i*2,true)); entries.push({name,start:ddv.getUint32(o+116,true),size:ddv.getUint32(o+120,true)}); }
+  const ent=entries.find(e=>names.includes(e.name)); if(!ent) throw new Error("no workbook found inside the .xls file");
+  if(ent.size>=cutoff) return readChain(ent.start,ent.size);
+  const mini=readChain(entries[0].start), mfat=[];
+  if(miniFatStart<0xFFFFFFFA){ const m=readChain(miniFatStart), mdv=new DataView(m.buffer,m.byteOffset,m.byteLength); for(let i=0;i<m.length/4;i++) mfat.push(mdv.getUint32(i*4,true)); }
+  const secs=chain(ent.start,mfat), out=new Uint8Array(secs.length*mss); secs.forEach((s,i)=>out.set(mini.subarray(s*mss,s*mss+mss),i*mss)); return out.subarray(0,ent.size);
+}
+function parseSST(segs,out){
+  let si=0,p=0,seg=segs[0];
+  const adv=()=>{ while(seg&&p>=seg.length){ si++; seg=segs[si]; p=0; } };
+  const b=()=>{ adv(); return seg? seg[p++] : 0; };
+  const u16=()=>b()|(b()<<8), u32=()=>(u16()|(u16()<<16))>>>0;
+  const skip=n=>{ while(n>0&&seg){ adv(); if(!seg) break; const k=Math.min(n,seg.length-p); p+=k; n-=k; } };
+  u32(); const unique=u32();
+  for(let k=0;k<unique;k++){
+    adv(); if(!seg) break;
+    const cch=u16(); let fl=b(); let rich=0,ext=0;
+    if(fl&8) rich=u16(); if(fl&4) ext=u32();
+    let s="", left=cch;
+    while(left>0){
+      if(p>=seg.length){ si++; seg=segs[si]; p=0; if(!seg) break; fl=seg[p++]; } // CONTINUE: fresh option byte
+      const wide=fl&1, avail=wide?Math.floor((seg.length-p)/2):seg.length-p, n=Math.min(left,avail);
+      for(let c=0;c<n;c++){ s+=wide? String.fromCharCode(seg[p]|(seg[p+1]<<8)) : String.fromCharCode(seg[p]); p+=wide?2:1; }
+      left-=n; if(n===0&&avail===0&&p<seg.length) p=seg.length;
+    }
+    skip(rich*4+ext); out.push(s);
+  }
+}
+function readXls(buf){
+  const w=readCFBStream(buf,["Workbook","Book"]), dv=new DataView(w.buffer,w.byteOffset,w.byteLength);
+  const recs=[]; for(let p=0;p+4<=w.length;){ const t=dv.getUint16(p,true), l=dv.getUint16(p+2,true); recs.push({t,o:p+4,l}); p+=4+l; }
+  const sst=[], sheets=[];
+  const str8=(o,cch,fl)=>{ let s=""; for(let k=0;k<cch;k++) s+= fl&1? String.fromCharCode(dv.getUint16(o+k*2,true)) : String.fromCharCode(w[o+k]); return s; };
+  for(let i=0;i<recs.length;i++){ const r=recs[i];
+    if(r.t===0x85){ const cch=w[r.o+6], fl=w[r.o+7]; if(w[r.o+5]===0) sheets.push({name:str8(r.o+8,cch,fl),pos:dv.getUint32(r.o,true)}); }
+    else if(r.t===0xFC){ const segs=[w.subarray(r.o,r.o+r.l)]; let j=i+1; while(j<recs.length&&recs[j].t===0x3C){ segs.push(w.subarray(recs[j].o,recs[j].o+recs[j].l)); j++; } parseSST(segs,sst); }
+  }
+  const rk=v=>{ let n; if(v&2) n=v>>2; else { const b=new DataView(new ArrayBuffer(8)); b.setUint32(4,(v&0xFFFFFFFC)>>>0,true); n=b.getFloat64(0,true); } return v&1? n/100 : n; };
+  const data={};
+  sheets.forEach(sh=>{
+    const rows=[]; const set=(r,c,v)=>{ (rows[r]=rows[r]||[])[c]=v; };
+    let i=recs.findIndex(x=>x.o-4===sh.pos); if(i<0) return; let pendingStr=null;
+    for(i=i+1;i<recs.length;i++){ const {t,o}=recs[i]; if(t===0x0A) break;
+      if(t===0xFD) set(dv.getUint16(o,true),dv.getUint16(o+2,true),sst[dv.getUint32(o+6,true)]);
+      else if(t===0x203) set(dv.getUint16(o,true),dv.getUint16(o+2,true),dv.getFloat64(o+6,true));
+      else if(t===0x27E) set(dv.getUint16(o,true),dv.getUint16(o+2,true),rk(dv.getUint32(o+6,true)));
+      else if(t===0xBD){ const r=dv.getUint16(o,true), c0=dv.getUint16(o+2,true), n=(recs[i].l-6)/6; for(let k=0;k<n;k++) set(r,c0+k,rk(dv.getUint32(o+4+k*6+2,true))); }
+      else if(t===0x204) set(dv.getUint16(o,true),dv.getUint16(o+2,true),str8(o+9,dv.getUint16(o+6,true),w[o+8]));
+      else if(t===0x06){ const r=dv.getUint16(o,true), c=dv.getUint16(o+2,true);
+        if(dv.getUint16(o+12,true)===0xFFFF){ const ty=w[o+6]; if(ty===0) pendingStr=[r,c]; else if(ty===1) set(r,c,!!w[o+8]); }
+        else set(r,c,dv.getFloat64(o+6,true)); }
+      else if(t===0x207&&pendingStr){ set(pendingStr[0],pendingStr[1],str8(o+3,dv.getUint16(o,true),w[o+2])); pendingStr=null; }
+    }
+    for(let r=0;r<rows.length;r++){ rows[r]=rows[r]||[]; for(let c=0;c<rows[r].length;c++) if(rows[r][c]===undefined) rows[r][c]=null; }
+    data[sh.name]=rows;
+  });
+  return {SheetNames:Object.keys(data), rows: async sn=>data[sn]};
+}
+
 /* ---------- Minimal .xlsx reader (no external libraries) ---------- */
 async function readXlsx(buf){
   const dv=new DataView(buf), u8=new Uint8Array(buf);
@@ -867,6 +944,7 @@ function matchGilt(code,name,isin){
   if(cm){ const c=cands.find(r=>Math.abs(r[2]-Number(cm[1]))<0.01); if(c) return GILT[c[0]]; }
   return null;
 }
+function isTotalRow(v){ return v!=null && /^\s*(grand\s+)?totals?\b/i.test(String(v)); }
 function toNum(v){ if(v==null||v==="") return 0; if(typeof v==="number") return v; const n=parseFloat(String(v).replace(/[£,\s]/g,"").replace(/^\((.*)\)$/,"-$1")); return isNaN(n)?0:n; }
 function parseCSV(text){
   const rows=[]; let row=[], f="", q=false;
@@ -912,23 +990,24 @@ async function importHL(wb){
     const H=low(rows[isBarc?bi:hi]);
     const col=(...tests)=>{ for(const t of tests){ const i=H.findIndex(h=>t instanceof RegExp? t.test(h) : h===t); if(i>=0) return i; } return -1; };
     const C= isBarc? {name:col("investment"),isin:col("identifier"),units:col(/^quantity/),price:col("last price (p)"),value:col("value (£)",/^value$/),yld:-1,code:-1}
-                   : {code:col("code"),name:col("stock"),yld:col(/^yield/),value:col(/^value/),units:col(/^units/),price:col(/^price/),isin:col("isin")};
+                   : {code:col("code"),sedol:col("sedol"),name:col("stock"),yld:col(/^yield/),value:col(/^value/),units:col(/^units/),price:col("price (p)",/^price/),isin:col("isin")};
     const g_=(r,i)=>i>=0? r[i] : null;
     for(let k=(isBarc?bi:hi)+1;k<rows.length;k++){
       const r=rows[k]; if(!r||r.every(v=>v==null||v==="")) continue;
-      const code=g_(r,C.code), name=g_(r,C.name), isin=g_(r,C.isin);
+      const code=g_(r,C.code), name=g_(r,C.name), isin=g_(r,C.isin), sedol=g_(r,C.sedol!=null?C.sedol:-1);
       if(name==null&&code==null) continue;
+      if(isTotalRow(name)||isTotalRow(code)) continue; // the "Totals" line at the bottom of each download
       const value=toNum(g_(r,C.value)), units=toNum(g_(r,C.units)), price=toNum(g_(r,C.price))||null, yld=toNum(g_(r,C.yld));
       const isCash=String(code)==="Cash"||/^cash$/i.test(String(name));
-      const g=isCash? null : matchGilt(code,name,isin);
+      const g=isCash? null : matchGilt(sedol!=null?sedol:code,name,isin);
       if(g){ const il=g.type==="IL";
         holdings.push({isin:g.isin,units,acct:id,price: il?null:price, ratio: il?(ratios[g.isin]||null):null, value: il?(value||null):null});
       } else if(isCash){ if(value) other.push({acct:id,name:"Cash",value,kind:"cash",yield:0}); }
       else if(value>0){
-        const nm=String(name);
+        const nm=String(name).replace(/\s+/g," ").trim();
         if(/treasury|govt|gilt/i.test(nm)&&!/fund|etf|ucits/i.test(nm)) unmatched.push(nm);
         const kind=/money|mmf|liquidity/i.test(nm)?"mmf":/index-linked gilt/i.test(nm)?"ilfund":"fund";
-        other.push({acct:id,name:nm.replace(/\s*\*\d(\s*\*\d)*\s*$/,""),value,kind,yield:yld});
+        other.push({acct:id,name:nm.replace(/\s*\*\d(\s*\*\d)*\s*$/,""),value,kind,yield:yld,code:String(sedol!=null?sedol:(code!=null?code:"")),units:units||null,price});
       }
     }
   }
@@ -938,12 +1017,12 @@ async function workbookFromFile(f){
   const buf=await f.arrayBuffer();
   if(/\.csv$/i.test(f.name)||/^text\//.test(f.type)){ const rows=parseCSV(new TextDecoder().decode(buf).replace(/^﻿/,"")); return {SheetNames:[f.name], rows: async()=>rows}; }
   const u=new Uint8Array(buf,0,4);
-  if(u[0]===0xD0&&u[1]===0xCF) throw new Error(`${f.name} is an old-style .xls file. Open it and save it as .xlsx or .csv first.`);
+  if(u[0]===0xD0&&u[1]===0xCF) return readXls(buf);
   return await readXlsx(buf);
 }
 document.getElementById("loadHL").onchange=async e=>{
   const files=[...e.target.files]; e.target.value=""; if(!files.length) return;
-  if(typeof DecompressionStream==="undefined"){ msg("This browser is too old to read .xlsx files. Please use an up-to-date Chrome, Edge, Safari or Firefox."); return; }
+  if(false){ msg("This browser is too old to read .xlsx files. Please use an up-to-date Chrome, Edge, Safari or Firefox."); return; }
   msg("Reading "+files.length+" file(s)…");
   const notes=[], acc=[], hold=[], oth=[], unm=[]; let nR=0;
   for(const f of files){
@@ -971,6 +1050,48 @@ document.getElementById("loadHL").onchange=async e=>{
   msg(`Loaded ${acc.length} account(s): ${notes.join("; ")}. Now holding ${gbp(gv)} of gilts and ${gbp(ov)} of other investments in total.`+
       (pm? " Gilt prices refreshed from the gilt explorer: "+pm : " Using the prices in the files (the gilt explorer's price file couldn't be reached).")+
       (unm.length?` Not recognised as gilts: ${[...new Set(unm)].join("; ")}.`:""));
+};
+
+/* ---------- Price update from a single HL download (e.g. watchlist) ---------- */
+async function applyPriceSheet(wb, fname){
+  let rows=null, hi=-1, H=null;
+  for(const sn of wb.SheetNames){ const R=await wb.rows(sn)||[]; const i=R.findIndex(r=>{ const l=(r||[]).map(v=>String(v==null?"":v).trim().toLowerCase()); return l.includes("stock")&&l.some(x=>x.startsWith("price")); }); if(i>=0){ rows=R; hi=i; H=R[i].map(v=>String(v==null?"":v).trim().toLowerCase()); break; } }
+  if(!rows) return `${fname}: no price table found (it needs "Stock" and "Price" columns).`;
+  const ci=(...ts)=>{ for(const t of ts){ const i=H.findIndex(h=>t instanceof RegExp?t.test(h):h===t); if(i>=0) return i; } return -1; };
+  const C={code:ci("code"),sedol:ci("sedol"),name:ci("stock"),units:ci(/^units/),pricep:ci("price (p)"),price:ci("price")};
+  let asof=null;
+  rows.forEach(r=>(r||[]).forEach(v=>{ if(typeof v==="string"&&/file generated at/i.test(v)){ const m=v.match(/(\d{1,2}:\d{2}) on (\d{1,2})\/(\d{1,2})\/(\d{4})/); if(m) asof=`${m[1]} on ${m[2]}/${m[3]}/${m[4]}`; } }));
+  const norm=s=>String(s||"").replace(/\s+/g," ").replace(/\s*\*\d(\s*\*\d)*\s*$/,"").trim().toLowerCase();
+  const short=s=>String(s).split("\n")[0].replace(/\s+/g," ").trim();
+  let upd=0; const notHeld=[], mism=[], noUnits=new Set();
+  for(let k=hi+1;k<rows.length;k++){ const r=rows[k]; if(!r) continue;
+    const name=r[C.name]; if(name==null||isTotalRow(name)) continue;
+    const sedol=C.sedol>=0?r[C.sedol]:null, code=C.code>=0?r[C.code]:null, units=C.units>=0?toNum(r[C.units]):0;
+    let pp= C.pricep>=0? toNum(r[C.pricep]) : 0;
+    if(!pp&&C.price>=0){ const raw=String(r[C.price]==null?"":r[C.price]); pp=toNum(raw.replace(/p$/i,"")); if(/£/.test(raw)) pp*=100; }
+    const g=matchGilt(sedol!=null?sedol:code,name,null);
+    if(g){ // gilts keep the explorer's prices; just check the units (HL shows index-linked units with inflation uplift, so skip those)
+      if(g.type==="C"&&S.holdings.length){ const held=S.holdings.filter(h=>h.isin===g.isin).reduce((t,h)=>t+h.units,0); if(Math.abs(held-units)>0.5) mism.push(`${g.name} (download ${units.toLocaleString("en-GB")}, accounts ${held.toLocaleString("en-GB")})`); }
+      continue; }
+    if(!pp) continue;
+    const keys=[sedol,code].filter(v=>v!=null&&v!=="").map(String);
+    const hits=(S.other||[]).filter(o=>o.kind!=="cash"&&((o.code&&keys.includes(String(o.code)))||norm(o.name)===norm(name)));
+    if(!hits.length){ if(units>0) notHeld.push(short(name)); continue; }
+    let heldU=0;
+    hits.forEach(o=>{ const u=toNum(o.units); if(u>0){ o.value=u*pp/100; o.price=pp; heldU+=u; upd++; } else noUnits.add(o.name); });
+    if(units>0&&heldU>0&&Math.abs(heldU-units)>Math.max(0.01,units*0.0005)) mism.push(`${short(name)} (download ${units.toLocaleString("en-GB")}, accounts ${heldU.toLocaleString("en-GB",{maximumFractionDigits:3})})`);
+  }
+  S.otherPricesAsOf=asof; persist(); render();
+  return `${fname}: updated ${upd} fund/share holdings${asof?` (prices at ${asof})`:""}.`+
+    (mism.length?` Units differ from your account files for: ${mism.join("; ")}. Those account files may be out of date.`:" Units match your account files.")+
+    (notHeld.length?` In the download but not in your account files: ${notHeld.join("; ")}.`:"")+
+    (noUnits.size?` Couldn't update (reload the account files once to pick up units): ${[...noUnits].join("; ")}.`:"");
+}
+document.getElementById("loadPrices").onchange=async e=>{
+  const f=e.target.files[0]; e.target.value=""; if(!f) return;
+  const out=document.getElementById("priceSheetMsg"); out.textContent="Reading…";
+  if(!(S.other||[]).length&&!S.holdings.length){ out.textContent="Load your account files first (tab 1)."; return; }
+  try{ out.textContent=await applyPriceSheet(await workbookFromFile(f), f.name); }catch(err){ console.error(err); out.textContent=`Couldn't read ${f.name}: ${err.message}`; }
 };
 
 /* ---------- Export gilts for the gilt yield explorer ---------- */
