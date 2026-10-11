@@ -103,7 +103,7 @@ svg text{fill:var(--muted);font-size:11px}
   <div class="card">
     <h2>How to use this</h2>
     <ol class="steps">
-      <li><b>Load the HL data workbook</b> (button below). This fills in every account, holding, price and index ratio. Funds, shares and cash are included in the totals too.</li>
+      <li><b>Load the platform downloads</b> (button below). You can pick several files at once: each raw HL account download, the Barclays download, or the combined HL data workbook. Each file updates only the accounts it contains, so you can also refresh one account on its own. Funds, shares and cash are included in the totals.</li>
       <li><b>Holdings &amp; prices:</b> check the holdings. Prices update automatically from the gilt yield explorer whenever you open the app online, or press "Update prices" on tab 2. Otherwise, tell the app which account each gilt is in, then enter today's price (from your platform or the gilt yield explorer). If you're not sure, the value shown on the platform statement can be typed in instead.</li>
       <li><b>Overview:</b> check the totals, how much is tax-wrapped and how much is taxable, and whether planned spending looks sustainable.</li>
       <li><b>Income for the year:</b> set how much you want to spend. The app shows how much comes from gilt interest and how much to raise by selling small amounts of low-coupon gilts.</li>
@@ -112,7 +112,7 @@ svg text{fill:var(--muted);font-size:11px}
     </ol>
     <div class="row noprint">
       <button class="g" id="saveBtn">Save my data (file)</button>
-      <label class="b">Load HL data workbook (.xlsx)<input type="file" id="loadHL" accept=".xlsx,.xlsm,.xls" hidden></label>
+      <label class="b">Load HL / Barclays files (.xlsx or .csv, several at once)<input type="file" id="loadHL" accept=".xlsx,.xlsm,.csv,text/csv" multiple hidden></label>
       <label class="g">Load saved data / gilt explorer portfolio<input type="file" id="loadFile" accept=".json,application/json" hidden></label>
       <button class="g" id="printBtn">Print this page</button>
       <button class="g" id="resetBtn">Clear all data</button>
@@ -153,6 +153,14 @@ svg text{fill:var(--muted);font-size:11px}
     <p class="small muted">One gilt per line: <code>ISIN, price</code> or <code>ISIN, price, index ratio</code>. Commas, tabs or spaces all work, so you can paste from a spreadsheet.</p>
     <textarea id="pasteBox" placeholder="GB00BMGR2916, 78.40&#10;GB00BMF9LH90, 52.10, 1.47"></textarea>
     <div class="row"><button class="b" id="pasteBtn">Apply prices</button><span class="small muted" id="pasteMsg"></span></div>
+  </div>
+  <div class="card noprint">
+    <h2>Send gilts to the gilt yield explorer</h2>
+    <p class="small muted">Creates a portfolio in the gilt explorer's own format. Copy it and paste it into the explorer's Portfolio tab, or save it as a <code>_portfolio.json</code> file and load that.</p>
+    <div class="row"><label class="f">Which holdings<select id="expScope"></select></label></div>
+    <textarea id="expPreview" readonly style="min-height:140px"></textarea>
+    <div class="row"><button class="b" id="expCopy">Copy for the gilt explorer</button><button class="g" id="expSave">Save as file</button><span class="small muted" id="expInfo"></span></div>
+    <p class="small muted" id="expMsg"></p>
   </div>
 </section>
 
@@ -481,7 +489,7 @@ function renderAccounts(){
 }
 function renderOther(){
   const O=S.other||[]; const el=document.getElementById("otherTable");
-  if(!O.length){ el.innerHTML=`<tbody><tr><td class="muted">None loaded. Load the HL data workbook on tab 1.</td></tr></tbody>`; return; }
+  if(!O.length){ el.innerHTML=`<tbody><tr><td class="muted">None loaded. Load your HL and Barclays downloads on tab 1.</td></tr></tbody>`; return; }
   const kinds={cash:"Cash",mmf:"Money market fund",ilfund:"Index-linked gilt fund",fund:"Fund / share"};
   let t=0, inc=0;
   el.innerHTML=`<thead><tr><th>Holding</th><th>Account</th><th>Kind</th><th class="num">Value</th><th class="num">Yield</th></tr></thead><tbody>`+
@@ -490,7 +498,7 @@ function renderOther(){
 }
 function renderHoldings(){
   const rows=all().sort((a,b)=>(a.g?a.g.mat:0)-(b.g?b.g.mat:0));
-  if(!rows.length){ document.getElementById("holdTable").innerHTML=`<tbody><tr><td class="muted">No holdings yet. On tab 1, load the HL data workbook, a saved planner file, or a gilt yield explorer portfolio.</td></tr></tbody>`; return; }
+  if(!rows.length){ document.getElementById("holdTable").innerHTML=`<tbody><tr><td class="muted">No holdings yet. On tab 1, load your HL and Barclays downloads, a saved planner file, or a gilt yield explorer portfolio.</td></tr></tbody>`; return; }
   let h=`<thead><tr><th>Gilt</th><th></th><th>Matures</th><th class="num">Nominal</th><th>Account</th><th class="num">Price</th><th class="num">Index ratio</th><th class="num">Value £ (override)</th><th class="num">Value</th><th class="num">Interest p.a.</th><th class="num">Running yield</th><th class="num">Yield to maturity</th></tr></thead><tbody>`;
   let tv=0, ti=0;
   rows.forEach(x=>{
@@ -713,7 +721,7 @@ function renderApril(){
 /* ---------- Events ---------- */
 function render(){
   const on=document.querySelector("section.tab.on").id;
-  if(on==="t-holdings"){ renderAccounts(); renderHoldings(); renderOther(); }
+  if(on==="t-holdings"){ renderAccounts(); renderHoldings(); renderOther(); renderExport(); }
   if(on==="t-overview") renderOverview();
   if(on==="t-income") renderIncome();
   if(on==="t-april") renderApril();
@@ -859,67 +867,134 @@ function matchGilt(code,name,isin){
   if(cm){ const c=cands.find(r=>Math.abs(r[2]-Number(cm[1]))<0.01); if(c) return GILT[c[0]]; }
   return null;
 }
+function toNum(v){ if(v==null||v==="") return 0; if(typeof v==="number") return v; const n=parseFloat(String(v).replace(/[£,\s]/g,"").replace(/^\((.*)\)$/,"-$1")); return isNaN(n)?0:n; }
+function parseCSV(text){
+  const rows=[]; let row=[], f="", q=false;
+  for(let i=0;i<text.length;i++){ const c=text[i];
+    if(q){ if(c==='"'){ if(text[i+1]==='"'){ f+='"'; i++; } else q=false; } else f+=c; }
+    else if(c==='"') q=true; else if(c===','){ row.push(f); f=""; }
+    else if(c==='\n'||c==='\r'){ if(c==='\r'&&text[i+1]==='\n') i++; row.push(f); rows.push(row); row=[]; f=""; }
+    else f+=c; }
+  if(f!==""||row.length){ row.push(f); rows.push(row); }
+  return rows.map(r=>r.map(v=>{ const t=v.trim(); return t===""?null:t; }));
+}
+const TYPE_CODE={ISA:"ISA",SIPP:"SIP",Taxable:"FAS"};
 async function importHL(wb){
   const R={}; for(const sn of wb.SheetNames) R[sn]=await wb.rows(sn);
-  const rowsOf=sn=>R[sn];
   const ratios={};
-  wb.SheetNames.filter(n=>/ratio/i.test(n)).forEach(sn=>rowsOf(sn).forEach(r=>{ const i=r&&typeof r[1]==="string"?r[1].trim():null; if(i&&GILT[i]&&typeof r[2]==="number") ratios[i]=r[2]; }));
-  const accounts=defaultAccounts(), holdings=[], other=[], unmatched=[];
-  wb.SheetNames.forEach(sn=>{
-    if(/^family$/i.test(sn)) return;
-    const rows=rowsOf(sn);
-    const hi=rows.findIndex(r=>r&&r[0]==="Code"&&r[1]==="Stock");
-    const bi=rows.findIndex(r=>r&&r[0]==="Investment"&&r[1]==="Identifier");
-    const cn0=rows.find(r=>r&&r[0]==="Client Name:");
-    if((hi<0||!cn0)&&bi<0) return; // only platform export sheets (HL: has a Client Name row; Barclays: Investment/Identifier)
+  wb.SheetNames.filter(n=>/ratio/i.test(n)).forEach(sn=>R[sn].forEach(r=>{ const i=r&&typeof r[1]==="string"?r[1].trim():null; if(i&&GILT[i]&&typeof r[2]==="number") ratios[i]=r[2]; }));
+  const accounts=[], holdings=[], other=[], unmatched=[];
+  for(const sn of wb.SheetNames){
+    if(/^family$/i.test(sn)) continue;
+    const rows=R[sn];
+    const low=r=>(r||[]).map(v=>String(v==null?"":v).trim().toLowerCase());
+    const hi=rows.findIndex(r=>{ const l=low(r); return l.includes("code")&&l.includes("stock"); });
+    const bi=rows.findIndex(r=>{ const l=low(r); return l.includes("investment")&&l.includes("identifier"); });
+    const cn=rows.find(r=>r&&/^client name/i.test(String(r[0]||"")));
+    if((hi<0||!cn)&&bi<0) continue; // only platform exports (HL: header + Client Name row; Barclays: Investment/Identifier header)
     const title=String((rows[0]||[])[0]||sn).trim();
-    const cn=rows.find(r=>r&&r[0]==="Client Name:");
     const owner=cn? String(cn[1]||"").replace(/^(Mr|Mrs|Ms|Miss|Dr)\.?\s+/i,"").split(/\s+/)[0] : "";
+    if(hi>=0&&bi<0&&(!owner||/^family$/i.test(owner)||/all accounts/i.test(title))) continue; // skip combined summary sheets
     let type="Taxable"; if(/\bISA\b/i.test(title)) type="ISA"; else if(/SIPP|pension/i.test(title)) type="SIPP";
-    let acct=accounts.find(a=>a.id===sn);
-    if(!acct){ acct={id:sn,name:(owner?owner+" ":"")+(bi>=0?"Barclays account":title),type}; accounts.push(acct); }
-    else if(hi>=0) acct.type=type;
-    if(owner) acct.owner=owner; else if(!acct.owner) acct.owner=acct.name.split(" ")[0];
-    for(let k=(hi>=0?hi:bi)+1;k<rows.length;k++){
+    const isBarc=hi<0;
+    const ext=isBarc? (title.match(/[A-Z]{0,3}\d[\d-]{4,}/)||[""])[0] : "";
+    let id;
+    if(isBarc){
+      const byExt=[...S.accounts,...accounts].find(a=>ext&&a.ext===ext);
+      id= byExt? byExt.id : (/^[A-Z]_[A-Z]{3}$/.test(sn)? sn : (S.accounts.find(a=>a.id==="Y_BIA"&&!a.ext)? "Y_BIA" : "BARC_"+(ext||sn)));
+    } else id= owner? owner[0].toUpperCase()+"_"+TYPE_CODE[type] : sn;
+    let acct=accounts.find(a=>a.id===id);
+    if(!acct){ const prev=S.accounts.find(a=>a.id===id);
+      acct=Object.assign({}, prev||{id, name:(owner?owner+" ":"")+(isBarc?"Barclays Smart Investor":title), type});
+      if(!isBarc) acct.type=type;
+      if(owner) acct.owner=owner; else if(!acct.owner) acct.owner=String(acct.name).split(" ")[0];
+      if(ext) acct.ext=ext; accounts.push(acct); }
+    const H=low(rows[isBarc?bi:hi]);
+    const col=(...tests)=>{ for(const t of tests){ const i=H.findIndex(h=>t instanceof RegExp? t.test(h) : h===t); if(i>=0) return i; } return -1; };
+    const C= isBarc? {name:col("investment"),isin:col("identifier"),units:col(/^quantity/),price:col("last price (p)"),value:col("value (£)",/^value$/),yld:-1,code:-1}
+                   : {code:col("code"),name:col("stock"),yld:col(/^yield/),value:col(/^value/),units:col(/^units/),price:col(/^price/),isin:col("isin")};
+    const g_=(r,i)=>i>=0? r[i] : null;
+    for(let k=(isBarc?bi:hi)+1;k<rows.length;k++){
       const r=rows[k]; if(!r||r.every(v=>v==null||v==="")) continue;
-      let code,name,isin=null,units,price,value,yld=null;
-      if(hi>=0){ [code,name,yld,,value,units,price]=r; }
-      else { [name,isin,units,,,,,,price,value]=r; code=null; }
+      const code=g_(r,C.code), name=g_(r,C.name), isin=g_(r,C.isin);
       if(name==null&&code==null) continue;
-      value=Number(value)||0; units=Number(units)||0; price=Number(price)||null;
-      const g=matchGilt(code==="Cash"?null:code,name,isin);
-      if(g){
-        const il=g.type==="IL";
-        holdings.push({isin:g.isin,units,acct:sn,price: il?null:price, ratio: il?(ratios[g.isin]||null):null, value: il? (value||null) : null});
-      } else if(String(code)==="Cash"||/^cash$/i.test(String(name))){
-        if(value) other.push({acct:sn,name:"Cash",value,kind:"cash",yield:0});
-      } else if(value>0){
-        if(/treasury|govt|gilt/i.test(String(name))&&!/fund|etf|ucits/i.test(String(name))) unmatched.push(String(name));
+      const value=toNum(g_(r,C.value)), units=toNum(g_(r,C.units)), price=toNum(g_(r,C.price))||null, yld=toNum(g_(r,C.yld));
+      const isCash=String(code)==="Cash"||/^cash$/i.test(String(name));
+      const g=isCash? null : matchGilt(code,name,isin);
+      if(g){ const il=g.type==="IL";
+        holdings.push({isin:g.isin,units,acct:id,price: il?null:price, ratio: il?(ratios[g.isin]||null):null, value: il?(value||null):null});
+      } else if(isCash){ if(value) other.push({acct:id,name:"Cash",value,kind:"cash",yield:0}); }
+      else if(value>0){
         const nm=String(name);
+        if(/treasury|govt|gilt/i.test(nm)&&!/fund|etf|ucits/i.test(nm)) unmatched.push(nm);
         const kind=/money|mmf|liquidity/i.test(nm)?"mmf":/index-linked gilt/i.test(nm)?"ilfund":"fund";
-        other.push({acct:sn,name:nm.replace(/\s*\*\d(\s*\*\d)*\s*$/,""),value,kind,yield:Number(yld)||0});
+        other.push({acct:id,name:nm.replace(/\s*\*\d(\s*\*\d)*\s*$/,""),value,kind,yield:yld});
       }
     }
-  });
+  }
   return {accounts,holdings,other,unmatched,nRatios:Object.keys(ratios).length};
 }
-document.getElementById("loadHL").onchange=e=>{
-  const f=e.target.files[0]; if(!f) return;
+async function workbookFromFile(f){
+  const buf=await f.arrayBuffer();
+  if(/\.csv$/i.test(f.name)||/^text\//.test(f.type)){ const rows=parseCSV(new TextDecoder().decode(buf).replace(/^﻿/,"")); return {SheetNames:[f.name], rows: async()=>rows}; }
+  const u=new Uint8Array(buf,0,4);
+  if(u[0]===0xD0&&u[1]===0xCF) throw new Error(`${f.name} is an old-style .xls file. Open it and save it as .xlsx or .csv first.`);
+  return await readXlsx(buf);
+}
+document.getElementById("loadHL").onchange=async e=>{
+  const files=[...e.target.files]; e.target.value=""; if(!files.length) return;
   if(typeof DecompressionStream==="undefined"){ msg("This browser is too old to read .xlsx files. Please use an up-to-date Chrome, Edge, Safari or Firefox."); return; }
-  const r=new FileReader();
-  r.onload=async ()=>{ try{
-    const wb=await readXlsx(r.result);
-    const res=await importHL(wb);
-    if(!res.holdings.length&&!res.other.length){ msg("No HL or Barclays holdings sheets were found in "+f.name+"."); return; }
-    S.accounts=res.accounts; S.holdings=res.holdings; S.other=res.other; S.sellAlloc={};
-    S.cashWrapped=Math.round(res.other.filter(o=>o.kind==="cash"&&acctById(o.acct).type!=="Taxable").reduce((t,o)=>t+o.value,0));
-    persist(); render();
-    const pm=await loadMarketPrices(true);
-    const gv=all().reduce((t,x)=>t+(x.value||0),0), ov=res.other.reduce((t,o)=>t+o.value,0);
-    msg(`Loaded ${f.name}: ${res.holdings.length} gilt holdings (${gbp(gv)}) and ${res.other.length} other holdings (${gbp(ov)}) across ${new Set(res.holdings.map(h=>h.acct).concat(res.other.map(o=>o.acct))).size} accounts.`+(pm? " Gilt prices then refreshed from the gilt explorer: "+pm : ` Using the workbook's prices (the gilt explorer's price file couldn't be reached), with index ratios for ${res.nRatios} index-linked gilts.`)+(res.unmatched.length?` Not recognised as gilts: ${res.unmatched.join("; ")}.`:""));
-  }catch(err){ console.error(err); msg("Couldn't read that workbook: "+err.message); } };
-  r.readAsArrayBuffer(f); e.target.value="";
+  msg("Reading "+files.length+" file(s)…");
+  const notes=[], acc=[], hold=[], oth=[], unm=[]; let nR=0;
+  for(const f of files){
+    try{ const res=await importHL(await workbookFromFile(f));
+      if(!res.accounts.length){ notes.push(`${f.name}: no HL or Barclays holdings found`); continue; }
+      res.accounts.forEach(a=>{ const i=acc.findIndex(x=>x.id===a.id); if(i>=0) acc[i]=a; else acc.push(a); });
+      const ids=new Set(res.accounts.map(a=>a.id));
+      for(let i=hold.length-1;i>=0;i--) if(ids.has(hold[i].acct)) hold.splice(i,1);
+      for(let i=oth.length-1;i>=0;i--) if(ids.has(oth[i].acct)) oth.splice(i,1);
+      hold.push(...res.holdings); oth.push(...res.other); unm.push(...res.unmatched); nR+=res.nRatios;
+      notes.push(`${f.name}: ${res.accounts.map(a=>a.name).join(", ")}`);
+    }catch(err){ console.error(err); notes.push(`${f.name}: couldn't read (${err.message})`); }
+  }
+  if(!acc.length){ msg(notes.join(". ")+"."); return; }
+  // Replace only the accounts found in these files; keep everything else already loaded.
+  const ids=new Set(acc.map(a=>a.id));
+  acc.forEach(a=>{ const i=S.accounts.findIndex(x=>x.id===a.id); if(i>=0) S.accounts[i]=a; else S.accounts.push(a); });
+  S.holdings=S.holdings.filter(h=>!ids.has(h.acct)).concat(hold);
+  S.other=(S.other||[]).filter(o=>!ids.has(o.acct)).concat(oth);
+  S.sellAlloc={};
+  S.cashWrapped=Math.round(S.other.filter(o=>o.kind==="cash"&&acctById(o.acct).type!=="Taxable").reduce((t,o)=>t+o.value,0));
+  persist(); render();
+  const pm=await loadMarketPrices(true);
+  const gv=all().reduce((t,x)=>t+(x.value||0),0), ov=S.other.reduce((t,o)=>t+o.value,0);
+  msg(`Loaded ${acc.length} account(s): ${notes.join("; ")}. Now holding ${gbp(gv)} of gilts and ${gbp(ov)} of other investments in total.`+
+      (pm? " Gilt prices refreshed from the gilt explorer: "+pm : " Using the prices in the files (the gilt explorer's price file couldn't be reached).")+
+      (unm.length?` Not recognised as gilts: ${[...new Set(unm)].join("; ")}.`:""));
 };
+
+/* ---------- Export gilts for the gilt yield explorer ---------- */
+function explorerPortfolio(scope){
+  const pick=h=>{ const a=acctById(h.acct); return scope==="all"||(scope==="wrapped"&&a.type!=="Taxable")||(scope==="taxable"&&a.type==="Taxable")||scope===h.acct; };
+  const agg={}; S.holdings.filter(h=>GILT[h.isin]&&h.units>0&&pick(h)).forEach(h=>agg[h.isin]=(agg[h.isin]||0)+h.units);
+  const label= scope==="all"?"family_gilts":scope==="wrapped"?"family_gilts_wrapped":scope==="taxable"?"family_gilts_taxable":acctById(scope).name;
+  const holdings=Object.keys(agg).sort((a,b)=>GILT[a].mat-GILT[b].mat).map(isin=>({isin,units:Math.round(agg[isin]*100)/100}));
+  return {name:label, saved:iso(new Date()), holdings};
+}
+function renderExport(){
+  const sel=document.getElementById("expScope"); if(!sel) return;
+  const cur=sel.value||"all";
+  const accts=S.accounts.filter(a=>S.holdings.some(h=>h.acct===a.id));
+  sel.innerHTML=`<option value="all">All accounts</option><option value="wrapped">ISAs &amp; SIPPs only</option><option value="taxable">Taxable accounts only</option>`+accts.map(a=>`<option value="${esc(a.id)}">${esc(a.name)}</option>`).join("");
+  sel.value=[...sel.options].some(o=>o.value===cur)?cur:"all";
+  const p=explorerPortfolio(sel.value);
+  document.getElementById("expPreview").value=JSON.stringify(p,null,2);
+  document.getElementById("expInfo").textContent=`${p.holdings.length} gilts, ${p.holdings.reduce((t,h)=>t+h.units,0).toLocaleString("en-GB")} nominal in total. Holdings of the same gilt in different accounts are added together.`;
+}
+document.getElementById("expScope").onchange=renderExport;
+document.getElementById("expCopy").onclick=async()=>{ const t=document.getElementById("expPreview"); try{ await navigator.clipboard.writeText(t.value); document.getElementById("expMsg").textContent="Copied. In the gilt explorer, paste it into the Portfolio tab's paste box."; }catch(e){ t.select(); document.getElementById("expMsg").textContent="Press Ctrl/Cmd+C to copy the selected text."; } };
+document.getElementById("expSave").onclick=()=>{ const p=explorerPortfolio(document.getElementById("expScope").value); const safe=(p.name.replace(/[^a-z0-9_-]+/gi,"_")||"portfolio"); const blob=new Blob([JSON.stringify(p,null,2)],{type:"application/json"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=safe+"_portfolio.json"; document.body.appendChild(a); a.click(); a.remove(); };
+
 function msg(t){ document.getElementById("loadMsg").textContent=t; }
 document.getElementById("printBtn").onclick=()=>window.print();
 document.getElementById("resetBtn").onclick=()=>{ if(confirm("Clear all holdings and settings from this browser? Save a copy first if you need one.")){ S=freshState(); persist(); render(); msg("Cleared."); } };
