@@ -1,0 +1,1031 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Gilt Holdings Analyser</title>
+<style>
+  :root{
+    --paper:#F7F5EF;
+    --paper-panel:#FBFAF6;
+    --ink:#232A2E;
+    --ink-soft:#5B6469;
+    --ink-muted:#7d8589;
+    --line:#D8D2C2;
+    --grid:#E6E1D4;
+    --hover:#EFEAD9;
+    --accent:#2A5C8A;
+    --series-own:#2a78d6;
+    --series-comp:#eb6834;
+    --good:#1f7a1f;
+    --bad:#b23a3a;
+    --hl:#FFF4C2;
+    --surface:#FCFBF8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#171716; --paper-panel:#1f1f1d; --ink:#ECEAE4; --ink-soft:#B9B6AC; --ink-muted:#8f8c84;
+      --line:#3a3935; --grid:#2c2b28; --hover:#2a2925; --accent:#7fb0e0;
+      --series-own:#3987e5; --series-comp:#d95926; --good:#5cbf5c; --bad:#e67272; --hl:#3d3620; --surface:#1a1a19;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#171716; --paper-panel:#1f1f1d; --ink:#ECEAE4; --ink-soft:#B9B6AC; --ink-muted:#8f8c84;
+    --line:#3a3935; --grid:#2c2b28; --hover:#2a2925; --accent:#7fb0e0;
+    --series-own:#3987e5; --series-comp:#d95926; --good:#5cbf5c; --bad:#e67272; --hl:#3d3620; --surface:#1a1a19;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{
+    background:var(--paper); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif;
+    font-size:14px; line-height:1.45;
+  }
+  header{ padding:20px 24px 14px; border-bottom:1px solid var(--line); }
+  header h1{ font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif; font-weight:600; font-size:22px; margin:0 0 4px; }
+  header p{ margin:0; color:var(--ink-soft); font-size:13px; max-width:760px; }
+  h2{ font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif; font-weight:600; font-size:18px; margin:0 0 4px; }
+  h3{ font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); margin:22px 0 8px; font-weight:600; }
+  main{ padding:16px 24px 40px; max-width:1240px; }
+  @media (max-width:600px){ header{padding:16px 16px 12px;} main{padding:12px 16px 32px;} }
+
+  .tabs{ display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:14px; overflow-x:auto; }
+  .tabs button{ background:none; border:none; border-bottom:2px solid transparent; padding:9px 12px; font:inherit; color:var(--ink-soft); cursor:pointer; white-space:nowrap; }
+  .tabs button[aria-selected="true"]{ color:var(--ink); border-bottom-color:var(--accent); font-weight:600; }
+
+  .controls{ display:flex; flex-wrap:wrap; gap:10px 18px; align-items:flex-end; margin-bottom:14px; }
+  .ctl{ display:flex; flex-direction:column; gap:4px; }
+  .ctl > label, .ctl > .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); font-weight:600; }
+  select, input[type=date], input[type=number], input[type=text]{
+    font:inherit; font-size:13px; padding:6px 8px; border:1px solid var(--line); border-radius:4px; background:var(--paper-panel); color:var(--ink);
+  }
+  input[type=number]{ width:84px; }
+  .seg{ display:inline-flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; background:var(--paper-panel); flex-wrap:wrap; }
+  .seg button{ font:inherit; font-size:13px; border:none; background:none; color:var(--ink-soft); padding:6px 11px; cursor:pointer; border-right:1px solid var(--line); }
+  .seg button:last-child{ border-right:none; }
+  .seg button[aria-pressed="true"]{ background:var(--accent); color:#fff; }
+  :root[data-theme="dark"] .seg button[aria-pressed="true"]{ color:#111; }
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .seg button[aria-pressed="true"]{ color:#111; } }
+  .seg button:disabled{ opacity:.45; cursor:not-allowed; }
+  .btn{ font:inherit; font-size:13px; padding:6px 12px; border:1px solid var(--line); border-radius:4px; background:var(--paper-panel); color:var(--ink); cursor:pointer; }
+  .btn:hover{ background:var(--hover); }
+  .btn.primary{ background:var(--accent); border-color:var(--accent); color:#fff; }
+  .note{ color:var(--ink-soft); font-size:12.5px; }
+  .muted{ color:var(--ink-muted); }
+  .warn{ background:var(--hl); border:1px solid var(--line); border-radius:5px; padding:8px 12px; font-size:13px; margin:0 0 12px; }
+
+  .tiles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; margin:6px 0 4px; }
+  .tile{ background:var(--paper-panel); border:1px solid var(--line); border-radius:6px; padding:10px 12px; }
+  .tile .k{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); font-weight:600; }
+  .tile .v{ font-size:22px; font-family:Georgia,serif; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .tile .s{ font-size:12px; color:var(--ink-soft); margin-top:2px; }
+
+  .tablewrap{ overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--paper-panel); }
+  table{ border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  th, td{ padding:7px 10px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--grid); }
+  th{ font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); font-weight:600; background:var(--paper); position:sticky; top:0; }
+  th:first-child, td:first-child, th.l, td.l{ text-align:left; }
+  tbody tr.click{ cursor:pointer; }
+  tbody tr.click:hover{ background:var(--hover); }
+  tr.total td{ font-weight:600; border-top:1px solid var(--line); background:var(--paper); }
+  tr.sub td{ font-weight:600; background:var(--paper); }
+  tr.sel td{ background:var(--hl); }
+  td.hlc{ background:var(--hl); font-weight:600; }
+  .pos{ color:var(--good); } .neg{ color:var(--bad); }
+  .gname{ font-weight:600; }
+  .sub2{ font-size:12px; color:var(--ink-soft); }
+
+  .chartcard{ background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:10px 12px 6px; margin-top:8px; position:relative; }
+  .chartcard .head{ display:flex; flex-wrap:wrap; justify-content:space-between; gap:8px; align-items:center; margin-bottom:4px; }
+  .chartcard .title{ font-weight:600; }
+  .legend{ display:flex; flex-wrap:wrap; gap:6px 14px; font-size:12px; color:var(--ink-soft); align-items:center; }
+  .legend i{ display:inline-block; vertical-align:middle; margin-right:5px; }
+  .legend .ln{ width:16px; height:2px; border-radius:1px; }
+  svg.chart{ width:100%; height:auto; display:block; touch-action:pan-y; }
+  svg.chart text{ fill:var(--ink-soft); font-size:11px; font-family:inherit; }
+  .tip{ position:absolute; pointer-events:none; background:var(--paper-panel); border:1px solid var(--line); border-radius:5px; padding:7px 9px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:none; z-index:5; min-width:150px; }
+  .tip b{ font-weight:600; }
+  .tip .row{ display:flex; justify-content:space-between; gap:14px; }
+  .tip .sw{ display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:5px; vertical-align:middle; }
+
+  .drop{ border:2px dashed var(--line); border-radius:8px; padding:22px; text-align:center; background:var(--paper-panel); }
+  .drop.over{ border-color:var(--accent); background:var(--hover); }
+  .grid2{ display:grid; grid-template-columns:1fr; gap:16px; }
+  @media (min-width:900px){ .grid2{ grid-template-columns:1fr 1fr; } }
+  details{ background:var(--paper-panel); border:1px solid var(--line); border-radius:6px; padding:8px 12px; margin-top:16px; }
+  details summary{ cursor:pointer; font-weight:600; }
+  details p, details li{ font-size:13px; color:var(--ink-soft); }
+  .log{ font-size:12.5px; margin-top:8px; }
+  .log div{ padding:2px 0; }
+  .pill{ display:inline-block; font-size:11px; padding:1px 7px; border-radius:9px; border:1px solid var(--line); color:var(--ink-soft); }
+  .ok{ color:var(--good); } .bad{ color:var(--bad); }
+  .empty{ text-align:center; padding:40px 16px; color:var(--ink-soft); }
+  .linkbtn{ background:none; border:none; color:var(--accent); cursor:pointer; font:inherit; padding:0; text-decoration:underline; }
+  footer{ padding:0 24px 24px; color:var(--ink-muted); font-size:12px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gilt Holdings Analyser</h1>
+  <p>Collates Hargreaves Lansdown transaction and income downloads for each family member's gilts. It works out what each holding has earned, in £ and as an annual rate, and compares it with what the same money would have earned in a strip, in cash at SONIA or at a fixed rate.</p>
+</header>
+<main>
+  <div class="tabs" role="tablist">
+    <button role="tab" data-tab="overview" aria-selected="true">Overview</button>
+    <button role="tab" data-tab="detail" aria-selected="false">Gilt detail</button>
+    <button role="tab" data-tab="data" aria-selected="false">Data &amp; settings</button>
+  </div>
+
+  <div id="controls" class="controls"></div>
+  <div id="banner"></div>
+  <section id="tab-overview"></section>
+  <section id="tab-detail" hidden></section>
+  <section id="tab-data" hidden></section>
+</main>
+<footer id="footer"></footer>
+
+<script>
+"use strict";
+/* =====================================================================
+   Dates & numbers
+   ===================================================================== */
+const DAY = 864e5;
+const isoToDn = s => { const [y,m,d] = s.split("-").map(Number); return Date.UTC(y,m-1,d)/DAY; };
+const dnToIso = n => new Date(n*DAY).toISOString().slice(0,10);
+const ukToIso = s => { const m = /^\s*(\d{1,2})\/(\d{1,2})\/(\d{4})\s*$/.exec(s||""); return m ? `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}` : null; };
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const fmtDate = dn => { const d = new Date(dn*DAY); return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
+const fmtGBP = (v, dp=0) => v==null||!isFinite(v) ? "–" : (v<0?"−":"")+"£"+Math.abs(v).toLocaleString("en-GB",{minimumFractionDigits:dp,maximumFractionDigits:dp});
+const fmtSignedGBP = v => v==null||!isFinite(v) ? "–" : (v>0?"+":"")+fmtGBP(v);
+const fmtPct = (v, dp=2) => v==null||!isFinite(v) ? "–" : (v<0?"−":"")+Math.abs(v*100).toFixed(dp)+"%";
+const fmtSignedPct = v => v==null||!isFinite(v) ? "–" : (v>0?"+":"")+fmtPct(v);
+const fmtPP = v => v==null||!isFinite(v) ? "–" : (v>0?"+":v<0?"−":"")+Math.abs(v*100).toFixed(2)+" pp";
+const fmtNum = (v, dp=0) => v==null||!isFinite(v) ? "–" : v.toLocaleString("en-GB",{minimumFractionDigits:dp,maximumFractionDigits:dp});
+const signCls = v => v>0.005 ? "pos" : v<-0.005 ? "neg" : "";
+const esc = s => String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+
+function addMonthsDn(dn, n){ const d = new Date(dn*DAY); const day = d.getUTCDate(); d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth()+n); const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 0)).getUTCDate(); d.setUTCDate(Math.min(day,last)); return Math.round(d.getTime()/DAY); }
+const isWeekend = dn => { const w = new Date(dn*DAY).getUTCDay(); return w===0||w===6; };
+function nextBizDn(dn){ let r = dn+1; while(isWeekend(r)) r++; return r; }
+function bizDaysBeforeDn(dn, n){ let r = dn; while(n>0){ r--; if(!isWeekend(r)) n--; } return r; }
+
+/* Accrued interest per £100 nominal for a conventional gilt traded on tradeDn
+   (settles next business day; 7-business-day ex-dividend period, negative when ex).
+   Same convention as savings-planner.html. */
+function accrued(couponPct, matDn, tradeDn){
+  const settle = nextBizDn(tradeDn);
+  if(!couponPct || settle >= matDn) return 0;
+  let n = matDn; while(addMonthsDn(n,-6) > settle) n = addMonthsDn(n,-6);
+  const last = addMonthsDn(n,-6), days = n-last;
+  if(settle >= bizDaysBeforeDn(n,7)) return -(couponPct/2)*(n-settle)/days;
+  return (couponPct/2)*(settle-last)/days;
+}
+
+/* Sorted [[dn, value], ...] -> value on or before dn (and the date it came from) */
+function lookup(series, dn){
+  if(!series || !series.length || dn < series[0][0]) return null;
+  let lo = 0, hi = series.length-1;
+  while(lo < hi){ const mid = (lo+hi+1)>>1; if(series[mid][0] <= dn) lo = mid; else hi = mid-1; }
+  return series[lo];
+}
+
+/* Annualised internal rate of return, matching the spreadsheet's convention:
+   sum of cash_i*(1+r)^((V - t_i)/365.25) + terminal = 0. */
+function irr(flows, terminal, vDn){
+  const f = flows.filter(x => x.dn <= vDn && x.cash);
+  if(!f.length) return null;
+  const npv = r => f.reduce((s,x) => s + x.cash*Math.pow(1+r,(vDn-x.dn)/365.25), terminal);
+  let lo = -0.95, hi = 5, flo = npv(lo), fhi = npv(hi);
+  if(!isFinite(flo) || !isFinite(fhi) || flo*fhi > 0) return null;
+  for(let i=0; i<200; i++){
+    const mid = (lo+hi)/2, fm = npv(mid);
+    if(Math.abs(fm) < 1e-7 || hi-lo < 1e-12) return mid;
+    if(flo*fm <= 0){ hi = mid; fhi = fm; } else { lo = mid; flo = fm; }
+  }
+  return (lo+hi)/2;
+}
+
+/* =====================================================================
+   Persistent state (your data stays in this browser)
+   ===================================================================== */
+const KEY = "gilt-holdings-v1";
+const DEFAULT_SETTINGS = { comparator:"strip", stripIsin:null, mode:"money", fixedRate:4.5, basis:"clean", valDate:null, holder:"all", priceField:"price", detailSec:null };
+let S = { files:[], tx:{}, overrides:{}, uploads:{ strips:{}, sonia:null }, settings:{...DEFAULT_SETTINGS} };
+function loadState(){
+  try{ const raw = localStorage.getItem(KEY); if(raw){ const o = JSON.parse(raw); S = { ...S, ...o, settings:{...DEFAULT_SETTINGS, ...(o.settings||{})}, uploads:{ strips:{}, sonia:null, ...(o.uploads||{}) } }; } }catch(e){}
+}
+function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ banner("Couldn't save to this browser's storage. Your changes will be lost when you close the page.", true); } }
+
+/* =====================================================================
+   Market data
+   ===================================================================== */
+const M = { gilts:new Map(), curve:null, strips:new Map(), sonia:null, status:{} };
+
+function ingestGiltYields(d, label){
+  if(!d || !Array.isArray(d.securities)) throw new Error("not a gilt_yields.json file");
+  for(const s of d.securities){
+    if(!s.redemption_date || !Array.isArray(s.series)) continue;
+    const isStrip = /strip/i.test(s.name||"") || s.coupon_pct==null;
+    // weekend rows in the file are mis-dated scrapes (e.g. 2026-01-10 holds a stale price), so skip them
+    const pts = s.series.filter(p => (p.dirty_price!=null || p.yield!=null) && !isWeekend(isoToDn(p.date))).map(p => [isoToDn(p.date), p.dirty_price, p.yield]).sort((a,b)=>a[0]-b[0]);
+    if(isStrip){
+      if(!M.strips.has(s.isin) && pts.length > 200) addStrip(s.isin, stripLabel(s.redemption_date), isoToDn(s.redemption_date), pts.map(p=>[p[0],p[1]]), label);
+      continue;
+    }
+    M.gilts.set(s.isin, { isin:s.isin, name:s.name, type:s.type, coupon:s.coupon_pct, mat:isoToDn(s.redemption_date), series:pts });
+  }
+  const c = d.curves && d.curves.nominal && d.curves.nominal.spot;
+  if(Array.isArray(c) && c.length){
+    const by = new Map();
+    for(const p of c){ let a = by.get(p.date); if(!a){ a = []; by.set(p.date,a); } a.push([p.maturity_years, p.rate_pct]); }
+    const dates = [...by.keys()].sort();
+    M.curve = { dates: dates.map(isoToDn), pts: dates.map(k => by.get(k).sort((a,b)=>a[0]-b[0])) };
+  }
+  M.status.gilts = `${label}${d.generated ? ` (generated ${fmtDate(isoToDn(d.generated.slice(0,10)))})` : ""}`;
+}
+const stripLabel = iso => { const d = new Date(isoToDn(iso)*DAY); return `UKS ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
+function addStrip(isin, name, matDn, series, src){ M.strips.set(isin, { isin, name, mat:matDn, series, src }); }
+
+/* Tradeweb export CSV (strips or gilts). Returns {strips:[...], gilts:[...]} */
+function parseTradeweb(text){
+  const lines = text.replace(/^﻿/,"").split(/\r?\n/).filter(l => l.trim());
+  const hdr = splitCSV(lines[0]).map(h => h.trim().toLowerCase());
+  const ix = n => hdr.indexOf(n);
+  const iDate = ix("close of business date"), iIsin = ix("isin"), iType = ix("type"), iMat = ix("maturity"), iName = ix("gilt name"),
+        iDirty = ix("dirty price"), iClean = ix("clean price"), iYld = ix("yield");
+  if(iDate<0 || iIsin<0) throw new Error("not a Tradeweb export");
+  const by = new Map();
+  for(const l of lines.slice(1)){
+    const f = splitCSV(l); const iso = ukToIso(f[iDate]) || (/^\d{4}-\d{2}-\d{2}/.test(f[iDate]) ? f[iDate].slice(0,10) : null);
+    if(!iso) continue;
+    const isin = f[iIsin].trim(); let o = by.get(isin);
+    if(!o){ o = { isin, name:(f[iName]||"").trim(), type:(f[iType]||"").trim(), mat:ukToIso(f[iMat]), pts:[] }; by.set(isin,o); }
+    const dirty = parseFloat(f[iDirty]), clean = parseFloat(f[iClean]), y = parseFloat(f[iYld]);
+    o.pts.push([isoToDn(iso), isFinite(dirty)?dirty:(isFinite(clean)?clean:null), isFinite(y)?y:null]);
+  }
+  const out = { strips:[], gilts:[] };
+  for(const o of by.values()){ o.pts.sort((a,b)=>a[0]-b[0]); (/strip/i.test(o.type) ? out.strips : out.gilts).push(o); }
+  return out;
+}
+function ingestTradeweb(text, src){
+  const r = parseTradeweb(text); const names = [];
+  for(const s of r.strips){ if(!s.mat) continue; addStrip(s.isin, stripLabel(s.mat), isoToDn(s.mat), s.pts.map(p=>[p[0],p[1]]), src); names.push(stripLabel(s.mat)); }
+  for(const g of r.gilts){
+    const ex = M.gilts.get(g.isin); if(!ex) continue;   // only top up gilts we already know (coupon/maturity come from gilt_yields)
+    const m = new Map(ex.series.map(p=>[p[0],p])); g.pts.forEach(p => m.set(p[0],p)); ex.series = [...m.values()].sort((a,b)=>a[0]-b[0]); names.push(ex.name);
+  }
+  return { r, names };
+}
+
+function ingestSonia(arr, label){
+  M.sonia = arr.map(([d,v]) => [isoToDn(d), +v]).sort((a,b)=>a[0]-b[0]);
+  M.status.sonia = label;
+}
+/* BoE database CSV download: "DATE,IUDZOS2" / "23 Apr 2018,100.0000" */
+function parseBoeSonia(text){
+  const lines = text.replace(/^﻿/,"").split(/\r?\n/).filter(l=>l.trim());
+  const hi = lines.findIndex(l => /IUDZOS2/i.test(l)); if(hi<0) throw new Error("no IUDZOS2 column");
+  const hdr = splitCSV(lines[hi]).map(h=>h.trim().toUpperCase()); const col = hdr.findIndex(h => h.includes("IUDZOS2"));
+  const out = [];
+  for(const l of lines.slice(hi+1)){
+    const f = splitCSV(l); const v = parseFloat(f[col]); if(!isFinite(v)) continue;
+    let iso = ukToIso(f[0]); if(!iso){ const t = Date.parse(f[0]+" UTC"); if(!isNaN(t)) iso = new Date(t).toISOString().slice(0,10); }
+    if(iso) out.push([iso, v]);
+  }
+  if(!out.length) throw new Error("no SONIA rows found");
+  return out;
+}
+
+async function loadMarket(){
+  const tryFetch = async (u, type) => { try{ const r = await fetch(u, {cache:"no-cache"}); if(!r.ok) return null; return type==="json" ? await r.json() : await r.text(); }catch(e){ return null; } };
+  setStatusLine("Loading market data from gilt_yields.json…");
+  const [gy, so, tw] = await Promise.all([ tryFetch("./gilt_yields.json","json"), tryFetch("./sonia.json","json"), tryFetch("./tradeweb_raw/Tradeweb_2036_strip.csv","text") ]);
+  if(gy){ try{ ingestGiltYields(gy, "gilt_yields.json"); }catch(e){ M.status.giltsErr = e.message; } }
+  if(so && Array.isArray(so.data)) ingestSonia(so.data, `sonia.json (BoE IUDZOS2${so.generated?`, updated ${fmtDate(isoToDn(so.generated.slice(0,10)))}`:""})`);
+  if(tw){ try{ ingestTradeweb(tw, "tradeweb_raw/Tradeweb_2036_strip.csv"); }catch(e){} }
+  // things you've uploaded into this browser
+  for(const [isin, s] of Object.entries(S.uploads.strips||{})) addStrip(isin, s.name, s.mat, s.series, "uploaded");
+  if(!M.sonia && S.uploads.sonia) ingestSonia(S.uploads.sonia, "uploaded BoE CSV");
+  M.loaded = true;
+  setStatusLine("");
+}
+
+/* =====================================================================
+   HL file import
+   ===================================================================== */
+function splitCSV(line){
+  const out = []; let cur = "", q = false;
+  for(let i=0;i<line.length;i++){
+    const c = line[i];
+    if(q){ if(c==='"'){ if(line[i+1]==='"'){ cur+='"'; i++; } else q=false; } else cur+=c; }
+    else if(c==='"') q = true; else if(c===','){ out.push(cur); cur=""; } else cur+=c;
+  }
+  out.push(cur); return out;
+}
+const num = s => { if(s==null) return null; const t = String(s).replace(/[£,\s]/g,"").replace(/�/g,""); if(!t || /^n\/?a$/i.test(t)) return null; const v = parseFloat(t); return isFinite(v) ? v : null; };
+
+/* "Treasury 0.625% 22/10/2050 Gilt" -> {coupon, matIso, il, key, label} */
+function parseSecurity(name){
+  const c = /(\d+(?:\.\d+)?)\s*%/.exec(name), m = /(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(name);
+  const il = /index|\bI\/?L\b|linked/i.test(name);
+  const coupon = c ? parseFloat(c[1]) : null, matIso = m ? `${m[3]}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}` : null;
+  const key = coupon!=null && matIso ? `${coupon}|${matIso}|${il?"IL":"C"}` : "name|"+name.trim().toLowerCase();
+  let label = name.trim();
+  if(coupon!=null && matIso){ const d = new Date(isoToDn(matIso)*DAY); label = `${coupon}% Treasury${il?" Index-Linked":""} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; }
+  return { coupon, matIso, il, key, label, hlName:name.trim() };
+}
+
+function parseHL(text){
+  const lines = text.replace(/^﻿/,"").split(/\r?\n/);
+  const first = lines[0] || "";
+  const m = /^\s*(Security movements|Income history)\s+for:\s*,?(.*)$/i.exec(first);
+  if(!m) return null;
+  const kind = /income/i.test(m[1]) ? "income" : "capital";
+  const security = splitCSV(m[2]).map(s=>s.trim()).filter(Boolean).join(" ");
+  let client="", clientNo="", account="", hdr=-1;
+  for(let i=1;i<lines.length;i++){
+    const f0 = splitCSV(lines[i])[0].trim();
+    let mm;
+    if((mm = /^Client Name:\s*(.*)$/i.exec(f0))) client = mm[1].trim();
+    else if((mm = /^Client Number:\s*(.*)$/i.exec(f0))) clientNo = mm[1].trim();
+    else if(/^DATE$/i.test(f0)){ hdr = i; break; }
+    else if(f0 && !account) account = f0;
+  }
+  if(hdr<0) throw new Error("couldn't find the DATE header row");
+  const rows = [];
+  for(const l of lines.slice(hdr+1)){
+    if(!l.trim()) continue;
+    const f = splitCSV(l).map(s=>s.trim());
+    const iso = ukToIso(f[0]); if(!iso) continue;
+    if(kind==="capital"){
+      const typeRaw = f[1], total = num(f[5]), qty = num(f[4]);
+      let type = /bought|buy|purchase|transfer\s*in|subscri/i.test(typeRaw) ? "buy" : /sold|sell|redemption|redeem|matur|transfer\s*out/i.test(typeRaw) ? "sell" : (total>0 ? "buy" : total<0 ? "sell" : "other");
+      const amount = type==="buy" ? Math.abs(total||0) : type==="sell" ? -Math.abs(total||0) : (total||0);
+      rows.push({ date:iso, type, typeRaw, ref:f[2], price:num(f[3]), qty:qty==null?0:Math.abs(qty), amount });
+    }else{
+      rows.push({ date:iso, type:"income", typeRaw:f[1], ref:f[1], desc:f[2], price:null, qty:0, amount:num(f[5])||0 });
+    }
+  }
+  return { kind, security, client, clientNo, account, rows };
+}
+
+function importHL(parsed, filename){
+  const sec = parseSecurity(parsed.security);
+  const holderKey = `${parsed.clientNo||parsed.client}|${parsed.account}`;
+  const hKey = `${holderKey}|${sec.key}`;
+  const fileId = `${hKey}|${parsed.kind}|${Date.now()}|${Math.random().toString(36).slice(2,7)}`;
+  let added = 0, dup = 0;
+  for(const r of parsed.rows){
+    const id = [hKey, r.date, r.type, r.ref, Math.round(r.amount*100), r.qty].join("|");
+    if(S.tx[id]){ dup++; if(!S.tx[id].srcs.includes(fileId)) S.tx[id].srcs.push(fileId); continue; }
+    S.tx[id] = { id, hKey, holderKey, secKey:sec.key, ...r, srcs:[fileId] }; added++;
+  }
+  S.files.push({ id:fileId, filename, kind:parsed.kind, hKey, holderKey, secKey:sec.key, security:sec.hlName, secLabel:sec.label, coupon:sec.coupon, matIso:sec.matIso, il:sec.il,
+                 client:parsed.client, clientNo:parsed.clientNo, account:parsed.account, rows:parsed.rows.length, added, importedAt:new Date().toISOString() });
+  return { added, dup, sec, parsed };
+}
+function removeFile(id){
+  S.files = S.files.filter(f => f.id!==id);
+  for(const [k,t] of Object.entries(S.tx)){ t.srcs = t.srcs.filter(s => s!==id); if(!t.srcs.length) delete S.tx[k]; }
+}
+
+async function readFileText(file){
+  const buf = await file.arrayBuffer();
+  const utf = new TextDecoder("utf-8", {fatal:false}).decode(buf);
+  // HL exports are Windows-1252 (the £ sign breaks UTF-8); re-decode if so
+  return utf.includes("�") ? new TextDecoder("windows-1252").decode(buf) : utf;
+}
+
+async function handleFiles(fileList){
+  const log = [];
+  for(const file of fileList){
+    try{
+      if(/\.json$/i.test(file.name)){
+        const o = JSON.parse(await readFileText(file));
+        if(o && o.app==="gilt-holdings"){ restoreBackup(o); log.push(["ok", `${file.name}: backup restored (${Object.keys(S.tx).length} transactions).`]); continue; }
+        if(o && Array.isArray(o.securities)){ ingestGiltYields(o, file.name+" (uploaded, this visit only)"); log.push(["ok", `${file.name}: market data loaded for this visit.`]); continue; }
+        if(o && Array.isArray(o.data) && /IUDZOS2/.test(o.series_code||"")){ S.uploads.sonia = o.data; ingestSonia(o.data, file.name+" (uploaded)"); log.push(["ok", `${file.name}: SONIA index loaded.`]); continue; }
+        throw new Error("JSON file not recognised");
+      }
+      const text = await readFileText(file);
+      const hl = parseHL(text);
+      if(hl){
+        const r = importHL(hl, file.name);
+        log.push(["ok", `${file.name}: ${hl.kind==="income"?"income":"transactions"} for ${r.sec.label}, ${hl.client||"unknown client"}. ${r.added} new row${r.added===1?"":"s"}${r.dup?`, ${r.dup} already loaded`:""}.`]);
+        continue;
+      }
+      if(/close of business date/i.test(text.slice(0,500))){
+        const { r, names } = ingestTradeweb(text, file.name);
+        for(const s of r.strips){ if(s.mat) S.uploads.strips[s.isin] = { name:stripLabel(s.mat), mat:isoToDn(s.mat), series:s.pts.map(p=>[p[0],p[1]]) }; }
+        log.push(["ok", `${file.name}: Tradeweb prices for ${names.length ? names.join(", ") : "no recognised securities"}.`]);
+        continue;
+      }
+      if(/IUDZOS2/i.test(text.slice(0,2000))){ const arr = parseBoeSonia(text); S.uploads.sonia = arr; ingestSonia(arr, file.name+" (uploaded)"); log.push(["ok", `${file.name}: ${arr.length} SONIA index values.`]); continue; }
+      throw new Error("not an HL, Tradeweb or Bank of England file");
+    }catch(e){ log.push(["bad", `${file.name}: ${e.message}`]); }
+  }
+  persist(); renderAll(); return log;
+}
+
+/* =====================================================================
+   Model: holdings, comparators, analytics
+   ===================================================================== */
+function buildHoldings(){
+  const by = new Map();
+  for(const f of S.files){
+    if(!by.has(f.hKey)) by.set(f.hKey, { hKey:f.hKey, holderKey:f.holderKey, secKey:f.secKey, client:f.client, clientNo:f.clientNo, account:f.account, secLabel:f.secLabel, security:f.security, coupon:f.coupon, matIso:f.matIso, il:f.il, tx:[], hasCapital:false, hasIncome:false });
+    const h = by.get(f.hKey); if(f.kind==="capital") h.hasCapital = true; else h.hasIncome = true;
+  }
+  for(const t of Object.values(S.tx)){ const h = by.get(t.hKey); if(h) h.tx.push(t); }
+  for(const h of by.values()){
+    h.tx.sort((a,b) => a.date<b.date?-1:a.date>b.date?1:0);
+    h.gilt = findGilt(h);
+  }
+  return [...by.values()];
+}
+function findGilt(h){
+  if(!h.matIso) return null;
+  for(const g of M.gilts.values()){
+    if(dnToIso(g.mat)===h.matIso && Math.abs((g.coupon??-1)-h.coupon)<1e-6 && (h.il ? /index/i.test(g.type) : !/index/i.test(g.type))) return g;
+  }
+  return null;
+}
+const holders = hs => { const m = new Map(); hs.forEach(h => { if(!m.has(h.holderKey)) m.set(h.holderKey, { key:h.holderKey, client:h.client, account:h.account }); }); return [...m.values()]; };
+const holderLabel = h => `${h.client.replace(/^(Mr|Mrs|Ms|Miss|Dr)\.?\s+/i,"")}${h.account ? " · "+h.account.replace(/^HL\s+/i,"").replace(/\s+Account$/i,"") : ""}`;
+const secId = h => h.gilt ? h.gilt.isin : h.secKey;
+
+/* Market price per £100 nominal on dn. Returns {price, dirty, yield, dn} or null */
+function giltPrice(gilt, dn, basis){
+  if(!gilt) return null;
+  const p = lookup(gilt.series, dn); if(!p || p[1]==null) return null;
+  const ai = /index/i.test(gilt.type) ? 0 : accrued(gilt.coupon, gilt.mat, p[0]);
+  return { dn:p[0], dirty:p[1], clean:p[1]-ai, price: basis==="dirty" ? p[1] : p[1]-ai, yield:p[2] };
+}
+
+const COMPARATORS = [
+  { id:"strip",  short:"Strip",          long:() => { const s = currentStrip(); return s ? `${s.name} strip` : "Strip"; } },
+  { id:"sonia",  short:"SONIA",          long:() => "Cash at SONIA" },
+  { id:"zero",   short:"Matched zero",   long:() => "Zero-coupon gilt to the same maturity (BoE curve)" },
+  { id:"fixed",  short:"Fixed rate",     long:() => `Fixed ${(+S.settings.fixedRate).toFixed(2)}% a year` },
+];
+function currentStrip(){
+  if(!M.strips.size) return null;
+  if(S.settings.stripIsin && M.strips.has(S.settings.stripIsin)) return M.strips.get(S.settings.stripIsin);
+  return M.strips.get("GB00B61BCQ39") || [...M.strips.values()][0];
+}
+/* Index level function for a comparator, for one holding. Returns fn(dn) -> {v, dn} | null */
+function comparatorIndex(cid, h){
+  if(cid==="strip"){ const s = currentStrip(); if(!s) return null; return dn => { const p = lookup(s.series, dn); return p && p[1]!=null ? { v:p[1], dn:p[0] } : null; }; }
+  if(cid==="sonia"){ if(!M.sonia) return null; return dn => { const p = lookup(M.sonia, dn); return p ? { v:p[1], dn:p[0] } : null; }; }
+  if(cid==="fixed"){ const r = (+S.settings.fixedRate||0)/100; return dn => ({ v: Math.pow(1+r, dn/365.25), dn }); }
+  if(cid==="zero"){
+    if(!M.curve || !h.matIso) return null;
+    const T = isoToDn(h.matIso);
+    return dn => {
+      let lo = 0, hi = M.curve.dates.length-1; if(dn < M.curve.dates[0]) return null;
+      while(lo<hi){ const mid=(lo+hi+1)>>1; if(M.curve.dates[mid]<=dn) lo=mid; else hi=mid-1; }
+      const pts = M.curve.pts[lo], tau = Math.max(0,(T-dn)/365.25);
+      let z;
+      if(tau <= pts[0][0]) z = pts[0][1];
+      else if(tau >= pts[pts.length-1][0]) z = pts[pts.length-1][1];
+      else { let i = 1; while(pts[i][0] < tau) i++; const [x0,y0] = pts[i-1], [x1,y1] = pts[i]; z = y0 + (y1-y0)*(tau-x0)/(x1-x0); }
+      return { v: Math.exp(-z/100*tau), dn: M.curve.dates[lo] };
+    };
+  }
+  return null;
+}
+function comparatorAvailable(cid){
+  if(cid==="strip") return !!currentStrip();
+  if(cid==="sonia") return !!M.sonia;
+  if(cid==="zero") return !!M.curve;
+  return true;
+}
+
+/* Investor cash flows: buys negative, sales and income positive */
+function flowsOf(h, vDn){
+  return h.tx.filter(t => isoToDn(t.date) <= vDn).map(t => ({ dn:isoToDn(t.date), cash: t.type==="income" ? t.amount : -t.amount, t }));
+}
+function qtyAt(h, dn){ let q = 0; for(const t of h.tx){ if(isoToDn(t.date) > dn) break; if(t.type==="buy") q += t.qty; else if(t.type==="sell") q -= t.qty; } return Math.max(0, Math.round(q*100)/100); }
+
+function valuationPrice(h, vDn){
+  const sid = secId(h), ov = S.overrides[sid];
+  if(ov && ov.date === dnToIso(vDn) && isFinite(ov.price)) return { price:+ov.price, manual:true, dn:vDn };
+  const p = giltPrice(h.gilt, vDn, S.settings.basis);
+  return p ? { price:p.price, manual:false, dn:p.dn, market:p } : null;
+}
+
+/* All the numbers for one holding at valuation date vDn */
+function analyse(h, vDn){
+  const flows = flowsOf(h, vDn);
+  const qty = qtyAt(h, vDn);
+  const vp = qty>0 ? valuationPrice(h, vDn) : { price:0, manual:false, dn:vDn };
+  const value = vp ? qty*vp.price/100 : null;
+  const sumCash = flows.reduce((s,f)=>s+f.cash,0);
+  const bought = flows.filter(f=>f.t.type==="buy").reduce((s,f)=>s-f.cash,0);
+  const sold = flows.filter(f=>f.t.type==="sell").reduce((s,f)=>s+f.cash,0);
+  const income = flows.filter(f=>f.t.type==="income").reduce((s,f)=>s+f.cash,0);
+  const out = { h, vDn, flows, qty, vp, value, bought, sold, income, netInvested:bought-sold,
+                gain: value==null ? null : sumCash + value, irr: value==null ? null : irr(flows, value, vDn), comps:{} };
+  for(const c of COMPARATORS) out.comps[c.id] = analyseComparator(c.id, h, flows, vDn, sumCash, value);
+  return out;
+}
+function analyseComparator(cid, h, flows, vDn, sumCash, value){
+  const idx = comparatorIndex(cid, h); if(!idx || !flows.length) return null;
+  const end = idx(vDn); if(!end) return { missing:"no comparator data at the valuation date" };
+  let cv = 0, missing = null;
+  for(const f of flows){ const st = idx(f.dn); if(!st){ missing = `no comparator data on ${fmtDate(f.dn)}`; break; } cv += -f.cash * end.v / st.v; }
+  if(missing) return { missing };
+  return { value:cv, gain: sumCash + cv, irr: irr(flows, cv, vDn), diff: value==null ? null : value - cv, endDn:end.dn };
+}
+/* Combine several holdings (same valuation date) */
+function combine(list, vDn){
+  if(!list.length) return null;
+  const flows = list.flatMap(a => a.flows);
+  const ok = list.every(a => a.value!=null);
+  const value = ok ? list.reduce((s,a)=>s+a.value,0) : null;
+  const sumCash = flows.reduce((s,f)=>s+f.cash,0);
+  const out = { vDn, flows, value, qty:list.reduce((s,a)=>s+a.qty,0), bought:list.reduce((s,a)=>s+a.bought,0), sold:list.reduce((s,a)=>s+a.sold,0), income:list.reduce((s,a)=>s+a.income,0),
+                gain: ok ? sumCash+value : null, irr: ok ? irr(flows, value, vDn) : null, comps:{} };
+  out.netInvested = out.bought - out.sold;
+  for(const c of COMPARATORS){
+    const cs = list.map(a => a.comps[c.id]);
+    if(cs.some(x => !x || x.missing)){ out.comps[c.id] = cs.find(x => x && x.missing) || null; continue; }
+    const cv = cs.reduce((s,x)=>s+x.value,0);
+    out.comps[c.id] = { value:cv, gain:sumCash+cv, irr:irr(flows, cv, vDn), diff: value==null?null:value-cv };
+  }
+  return out;
+}
+
+/* Default valuation date: the latest date every loaded data source covers */
+function defaultValDate(hs){
+  const ends = []; const lim = [];
+  const add = (dn, what) => { if(dn!=null){ ends.push(dn); lim.push([dn, what]); } };
+  for(const h of hs){ if(h.gilt && qtyAt(h, Infinity)>0) add(h.gilt.series[h.gilt.series.length-1][0], h.secLabel+" prices"); }
+  const s = currentStrip(); if(s) add(s.series[s.series.length-1][0], s.name+" strip");
+  if(M.sonia) add(M.sonia[M.sonia.length-1][0], "SONIA");
+  if(M.curve) add(M.curve.dates[M.curve.dates.length-1], "BoE curve");
+  if(!ends.length){ const t = new Date(); return { dn: Math.floor(Date.UTC(t.getFullYear(),t.getMonth(),t.getDate())/DAY), why:"today" }; }
+  const mn = Math.min(...ends); const w = lim.filter(x=>x[0]===mn).map(x=>x[1]);
+  return { dn:mn, why: Math.max(...ends)===mn ? "latest data" : `limited by ${w.join(", ")}` };
+}
+function valDn(hs){ return S.settings.valDate ? isoToDn(S.settings.valDate) : defaultValDate(hs).dn; }
+
+/* =====================================================================
+   Rendering
+   ===================================================================== */
+let HOLDINGS = [];
+const $ = s => document.querySelector(s);
+function banner(msg, warn){ $("#banner").innerHTML = msg ? `<div class="warn">${msg}</div>` : ""; }
+function setStatusLine(t){ $("#footer").textContent = t; }
+
+function renderControls(){
+  const st = S.settings, hs = holders(HOLDINGS);
+  const tab = currentTab();
+  const compBtns = COMPARATORS.map(c => `<button data-comp="${c.id}" aria-pressed="${st.comparator===c.id}" ${comparatorAvailable(c.id)?"":"disabled title='Data not loaded'"}>${c.short}</button>`).join("");
+  const strips = [...M.strips.values()].sort((a,b)=>a.mat-b.mat);
+  const vd = valDn(HOLDINGS), dv = defaultValDate(HOLDINGS);
+  $("#controls").innerHTML = tab==="data" ? "" : `
+    <div class="ctl"><label for="c-holder">Family member</label>
+      <select id="c-holder"><option value="all">Everyone</option>${hs.map(h=>`<option value="${esc(h.key)}" ${st.holder===h.key?"selected":""}>${esc(holderLabel(h))}</option>`).join("")}</select></div>
+    <div class="ctl"><span class="lbl">Compare with</span><div class="seg" id="c-comp">${compBtns}</div></div>
+    ${st.comparator==="strip" && strips.length>1 ? `<div class="ctl"><label for="c-strip">Strip</label><select id="c-strip">${strips.map(s=>`<option value="${s.isin}" ${currentStrip()===s?"selected":""}>${esc(s.name)}</option>`).join("")}</select></div>`:""}
+    ${st.comparator==="fixed" ? `<div class="ctl"><label for="c-rate">Rate % a year</label><input id="c-rate" type="number" step="0.05" value="${st.fixedRate}"></div>`:""}
+    <div class="ctl"><span class="lbl">Measure</span><div class="seg" id="c-mode">
+      <button data-mode="money" aria-pressed="${st.mode==="money"}">£ gain</button><button data-mode="rate" aria-pressed="${st.mode==="rate"}">% a year</button></div></div>
+    <div class="ctl"><label for="c-date">Valuation date</label>
+      <input id="c-date" type="date" value="${dnToIso(vd)}"></div>
+    <div class="ctl note" style="padding-bottom:6px">${S.settings.valDate ? `<button class="linkbtn" id="c-date-reset">Use latest (${fmtDate(dv.dn)})</button>` : `Latest date all data covers${dv.why.startsWith("limited")?` · ${esc(dv.why)}`:""}`}</div>`;
+  if(tab==="data") return;
+  $("#c-holder").onchange = e => { st.holder = e.target.value; persist(); renderAll(); };
+  $("#c-comp").onclick = e => { const b = e.target.closest("button[data-comp]"); if(!b||b.disabled) return; st.comparator = b.dataset.comp; persist(); renderAll(); };
+  $("#c-mode").onclick = e => { const b = e.target.closest("button[data-mode]"); if(!b) return; st.mode = b.dataset.mode; persist(); renderAll(); };
+  const cs = $("#c-strip"); if(cs) cs.onchange = e => { st.stripIsin = e.target.value; persist(); renderAll(); };
+  const cr = $("#c-rate"); if(cr) cr.onchange = e => { st.fixedRate = parseFloat(e.target.value)||0; persist(); renderAll(); };
+  $("#c-date").onchange = e => { st.valDate = e.target.value || null; persist(); renderAll(); };
+  const rr = $("#c-date-reset"); if(rr) rr.onclick = () => { st.valDate = null; persist(); renderAll(); };
+}
+
+function filtered(){ return HOLDINGS.filter(h => S.settings.holder==="all" || h.holderKey===S.settings.holder); }
+
+/* the three headline cells: your result, comparator result, difference */
+function headline(a, cid){
+  const c = a && a.comps[cid]; const money = S.settings.mode==="money";
+  const you = money ? a.gain : a.irr;
+  const them = c && !c.missing ? (money ? c.gain : c.irr) : null;
+  const diff = c && !c.missing ? (money ? c.diff : (a.irr!=null && c.irr!=null ? a.irr - c.irr : null)) : null;
+  const f = money ? fmtSignedGBP : fmtSignedPct, fd = money ? fmtSignedGBP : fmtPP;
+  return { you, them, diff, youTxt:f(you), themTxt: c && c.missing ? "no data" : f(them), diffTxt: fd(diff), missing: c && c.missing };
+}
+
+function renderOverview(){
+  const el = $("#tab-overview");
+  if(!HOLDINGS.length){ el.innerHTML = emptyState(); bindEmpty(el); return; }
+  const vDn = valDn(HOLDINGS), cid = S.settings.comparator, money = S.settings.mode==="money";
+  const hs = filtered();
+  const rows = hs.map(h => analyse(h, vDn));
+  const comp = COMPARATORS.find(c=>c.id===cid);
+  const groups = new Map(); rows.forEach(a => { const k = a.h.holderKey; if(!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
+  const total = combine(rows, vDn);
+  const T = headline(total, cid);
+  const missingPrice = rows.filter(a => a.qty>0 && a.value==null);
+
+  let warn = "";
+  if(missingPrice.length) warn += `<div class="warn">No price for ${missingPrice.map(a=>esc(a.h.secLabel)).join(", ")} on ${fmtDate(vDn)}. Enter one on the Gilt detail tab, or load market data on the Data tab.</div>`;
+  const halfLoaded = HOLDINGS.filter(h => !h.hasCapital || !h.hasIncome);
+  if(halfLoaded.length) warn += `<div class="warn">Only one of the two HL files has been loaded for: ${halfLoaded.map(h=>`${esc(h.secLabel)} (${esc(holderLabel(h))}, missing ${h.hasCapital?"income history":"security movements"})`).join("; ")}. Figures for these holdings will be incomplete.</div>`;
+
+  const colHead = money
+    ? `<th>Your gain</th><th>${esc(comp.short)} gain</th><th>You vs ${esc(comp.short)}</th>`
+    : `<th>Your return<br>(IRR a year)</th><th>${esc(comp.short)} return</th><th>Difference</th>`;
+  const rowHtml = (a, cls, label, sub, click) => {
+    const H = headline(a, cid);
+    return `<tr class="${cls||""}" ${click?`data-sec="${esc(click)}"`:""}>
+      <td class="l">${label}${sub?`<div class="sub2">${sub}</div>`:""}</td>
+      <td>${a.qty ? fmtNum(a.qty) : "<span class='muted'>sold</span>"}</td>
+      <td>${fmtGBP(a.netInvested)}</td><td>${fmtGBP(a.income)}</td><td>${a.value==null?"–":fmtGBP(a.value)}</td>
+      <td class="hlc ${signCls(H.you)}">${H.youTxt}</td><td>${H.themTxt}</td><td class="hlc ${signCls(H.diff)}">${H.diffTxt}</td></tr>`;
+  };
+  let body = "";
+  for(const [k, list] of groups){
+    const hl = holders(list.map(a=>a.h))[0];
+    if(groups.size>1 || S.settings.holder==="all") body += `<tr class="sub"><td class="l" colspan="8">${esc(holderLabel(hl))}</td></tr>`;
+    list.sort((x,y)=> (x.h.matIso||"").localeCompare(y.h.matIso||""));
+    for(const a of list) body += rowHtml(a, "click", `<span class="gname">${esc(a.h.secLabel)}</span>`, a.h.gilt ? "" : "<span class='bad'>not matched to market data</span>", secId(a.h));
+    if(list.length>1 && groups.size>1) body += rowHtml(combine(list, vDn), "sub", `Total, ${esc(hl.client)}`);
+  }
+  body += rowHtml(total, "total", rows.length>1 ? "Total" : "Total");
+
+  el.innerHTML = `${warn}
+    <div class="tiles">
+      <div class="tile"><div class="k">Value on ${fmtDate(vDn)}</div><div class="v">${fmtGBP(total.value)}</div><div class="s">${fmtGBP(total.netInvested)} net invested · ${fmtGBP(total.income)} income</div></div>
+      <div class="tile"><div class="k">${money?"Your gain":"Your return a year"}</div><div class="v ${signCls(T.you)}">${T.youTxt}</div><div class="s">${money ? `IRR ${fmtPct(total.irr)} a year` : `${fmtSignedGBP(total.gain)} in total`}</div></div>
+      <div class="tile"><div class="k">${esc(comp.long())}</div><div class="v">${T.themTxt}</div><div class="s">${T.missing ? esc(T.missing) : money ? `IRR ${fmtPct(total.comps[cid]&&total.comps[cid].irr)} a year` : `${fmtSignedGBP(total.comps[cid]&&total.comps[cid].gain)} in total`}</div></div>
+      <div class="tile"><div class="k">You vs ${esc(comp.short)}</div><div class="v ${signCls(T.diff)}">${T.diffTxt}</div><div class="s">${T.diff==null?"":T.diff>0?"Your gilts did better":"The comparator did better"}</div></div>
+    </div>
+    <h3>By holding</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th class="l">Gilt</th><th>Nominal held</th><th>Net invested</th><th>Income</th><th>Value now</th>${colHead}</tr></thead>
+      <tbody>${body}</tbody></table></div>
+    <p class="note">Click a gilt to see its price history and trades. Highlighted columns are the figures from the yellow cells in your spreadsheet. ${valuationNote()}</p>
+    ${methodNote()}`;
+  el.querySelectorAll("tr[data-sec]").forEach(tr => tr.onclick = () => { S.settings.detailSec = tr.dataset.sec; persist(); setTab("detail"); });
+}
+function valuationNote(){
+  return S.settings.basis==="dirty" ? "Holdings are valued at the market mid dirty price (including accrued interest)." : "Holdings are valued at the market mid clean price (excluding accrued interest), unless you've entered your own price on the Gilt detail tab.";
+}
+function methodNote(){
+  return `<details><summary>How these figures are calculated</summary>
+    <ul>
+      <li><b>Your gain</b> = everything you've received (sale proceeds and coupons) + the holding's value today − everything you've paid for purchases. This matches cell H3 in your spreadsheet.</li>
+      <li><b>Your return (IRR)</b> is the annual rate that makes those same cash flows and today's value net to zero. Each flow is compounded by (1+r)^(days/365.25), as in your H column. This matches H4/H8.</li>
+      <li><b>The comparator</b> assumes each purchase was put into the comparator instead, on the same day, and each coupon or sale was taken out of it. Its value today is Σ cash × index(today) ÷ index(date). "You vs comparator" is your value today minus the comparator's value today (L3/P3). The comparator's return is the IRR of the same cash flows ending at the comparator's value (L4/P4).</li>
+      <li><b>Strip:</b> Tradeweb prices for the chosen strip (UKS Sep 2036 by default, as in your sheet). <b>SONIA:</b> the Bank of England's SONIA Compounded Index (IUDZOS2). <b>Matched zero:</b> a zero-coupon gilt maturing on the same day as your gilt, priced from the Bank of England's fitted spot curve. This shows whether you beat the gilt curve as a whole. <b>Fixed rate:</b> a savings account paying the rate you set, compounded annually.</li>
+      <li>Index values on non-trading days use the latest earlier value. All coupons and sales up to the valuation date are included in every comparator.</li>
+    </ul></details>`;
+}
+
+function emptyState(){
+  return `<div class="empty"><h2>Load your HL downloads to start</h2>
+    <p>For each gilt, download both the <b>Security movements</b> and the <b>Income history</b> CSV from HL and drop them here. You can drop as many files as you like, for any family member, and loading a file twice won't duplicate anything.</p>
+    <div class="drop" id="drop-empty" style="max-width:560px;margin:16px auto 0">Drop HL CSV files here, or <button class="btn primary" id="pick-empty">choose files</button></div></div>`;
+}
+function bindEmpty(el){ bindDrop(el.querySelector("#drop-empty"), el.querySelector("#pick-empty")); }
+
+/* --------------------------- Gilt detail -------------------------- */
+function renderDetail(){
+  const el = $("#tab-detail");
+  if(!HOLDINGS.length){ el.innerHTML = emptyState(); bindEmpty(el); return; }
+  const hsAll = filtered();
+  const secs = new Map(); hsAll.forEach(h => { const id = secId(h); if(!secs.has(id)) secs.set(id, h); });
+  if(!secs.size){ el.innerHTML = `<p class="empty">No holdings for this family member.</p>`; return; }
+  let sid = S.settings.detailSec; if(!secs.has(sid)) sid = [...secs.keys()][0];
+  const hs = hsAll.filter(h => secId(h)===sid), h0 = hs[0], gilt = h0.gilt;
+  const vDn = valDn(HOLDINGS), cid = S.settings.comparator, money = S.settings.mode==="money";
+  const parts = hs.map(h => analyse(h, vDn)), A = combine(parts, vDn);
+  const comp = COMPARATORS.find(c=>c.id===cid), H = headline(A, cid);
+  const mkt = giltPrice(gilt, vDn, "clean");
+  const ov = S.overrides[sid]; const ovActive = ov && ov.date===dnToIso(vDn);
+
+  const sel = `<select id="d-sec">${[...secs.entries()].sort((a,b)=>(a[1].matIso||"").localeCompare(b[1].matIso||"")).map(([id,h])=>`<option value="${esc(id)}" ${id===sid?"selected":""}>${esc(h.secLabel)}</option>`).join("")}</select>`;
+  const scoreRows = COMPARATORS.map(c => {
+    const x = A.comps[c.id]; const on = c.id===cid;
+    if(!x || x.missing) return `<tr class="${on?"sel":""}"><td class="l">${esc(c.long())}</td><td colspan="5" class="muted">${x&&x.missing?esc(x.missing):"data not loaded"}</td></tr>`;
+    return `<tr class="${on?"sel":""}"><td class="l">${esc(c.long())}</td><td>${fmtGBP(x.value)}</td><td class="${signCls(x.gain)}">${fmtSignedGBP(x.gain)}</td><td>${fmtPct(x.irr)}</td>
+      <td class="${signCls(x.diff)}">${fmtSignedGBP(x.diff)}</td><td class="${signCls(A.irr-x.irr)}">${A.irr!=null&&x.irr!=null?fmtPP(A.irr-x.irr):"–"}</td></tr>`;
+  }).join("");
+
+  const txRows = hs.flatMap(h => h.tx.map(t => ({h,t}))).sort((a,b)=> a.t.date<b.t.date?1:-1).map(({h,t}) => {
+    const dn = isoToDn(t.date), m = t.type!=="income" ? giltPrice(gilt, dn, "clean") : null;
+    const cash = t.type==="income" ? t.amount : -t.amount, after = dn > vDn;
+    return `<tr class="${after?"muted":""}"><td class="l">${fmtDate(dn)}</td>${hs.length>1||S.settings.holder==="all"?`<td class="l">${esc(holderLabel(h))}</td>`:""}
+      <td class="l">${t.type==="buy"?"Bought":t.type==="sell"?"Sold":t.type==="income"?"Coupon":esc(t.typeRaw)}</td>
+      <td>${t.price!=null?t.price.toFixed(2):""}</td><td>${m && t.type!=="income" ? m.clean.toFixed(2) : ""}</td>
+      <td>${t.qty?fmtNum(t.qty):""}</td><td class="${signCls(cash)}">${fmtSignedGBP(cash).replace(/^\+?/, cash>0?"+":"")}</td><td class="l muted">${esc(t.ref)}${after?" (after valuation date)":""}</td></tr>`;
+  }).join("");
+
+  el.innerHTML = `
+    <div class="controls" style="margin-bottom:6px">
+      <div class="ctl"><label for="d-sec">Gilt</label>${sel}</div>
+      <div class="ctl"><label for="d-price">Valuation price (p per £100)</label>
+        <input id="d-price" type="number" step="0.01" style="width:110px" placeholder="${mkt?mkt.clean.toFixed(2):""}" value="${ovActive?ov.price:""}"></div>
+      <div class="ctl note" style="padding-bottom:6px">${ovActive ? `Your own price for ${fmtDate(vDn)} is being used. <button class="linkbtn" id="d-price-clear">Use market price</button>` :
+        mkt ? `Leave blank to use the market mid clean price (${mkt.clean.toFixed(2)} on ${fmtDate(mkt.dn)}). Enter HL's sell price to match your sheet.` : "No market price available. Enter a price to value this holding."}
+        ${ov && !ovActive ? `<br>You entered ${ov.price} for ${fmtDate(isoToDn(ov.date))}, which isn't the valuation date, so it isn't used.` : ""}</div>
+    </div>
+    <h2>${esc(h0.secLabel)}</h2>
+    <div class="note">${gilt ? `${esc(gilt.isin)} · coupon ${gilt.coupon}% paid half-yearly · matures ${fmtDate(gilt.mat)}${mkt&&mkt.yield!=null?` · yield ${mkt.yield.toFixed(2)}% on ${fmtDate(mkt.dn)}`:""}` : "Not matched to any security in gilt_yields.json, so there's no price history."}</div>
+    <div class="tiles" style="margin-top:12px">
+      <div class="tile"><div class="k">Value on ${fmtDate(vDn)}</div><div class="v">${fmtGBP(A.value)}</div><div class="s">${fmtNum(A.qty)} nominal${parts[0]&&parts[0].vp&&A.qty?` at ${parts.find(p=>p.vp)?.vp.price.toFixed(2)}p${ovActive?" (your price)":""}`:""}</div></div>
+      <div class="tile"><div class="k">${money?"Your gain":"Your return a year"}</div><div class="v ${signCls(H.you)}">${H.youTxt}</div><div class="s">${money?`IRR ${fmtPct(A.irr)} a year`:`${fmtSignedGBP(A.gain)} in total`} · ${fmtGBP(A.income)} coupons</div></div>
+      <div class="tile"><div class="k">${esc(comp.long())}</div><div class="v">${H.themTxt}</div><div class="s">${H.missing?esc(H.missing):money?`IRR ${fmtPct(A.comps[cid]&&A.comps[cid].irr)} a year`:`${fmtSignedGBP(A.comps[cid]&&A.comps[cid].gain)} in total`}</div></div>
+      <div class="tile"><div class="k">You vs ${esc(comp.short)}</div><div class="v ${signCls(H.diff)}">${H.diffTxt}</div><div class="s">${H.diff==null?"":H.diff>0?"This gilt did better":"The comparator did better"}</div></div>
+    </div>
+
+    <div class="chartcard" id="pc-card">
+      <div class="head"><div class="title" id="pc-title"></div>
+        <div class="seg" id="pc-field"><button data-f="price" aria-pressed="${S.settings.priceField==="price"}">Price</button><button data-f="yield" aria-pressed="${S.settings.priceField==="yield"}">Yield</button></div></div>
+      <div class="legend" id="pc-legend"></div>
+      <svg class="chart" id="pc" viewBox="0 0 900 340" role="img"></svg><div class="tip"></div>
+    </div>
+    <div class="chartcard" id="gc-card">
+      <div class="head"><div class="title">Cumulative gain: this gilt vs ${esc(comp.long())}</div></div>
+      <div class="legend" id="gc-legend"></div>
+      <svg class="chart" id="gc" viewBox="0 0 900 300" role="img"></svg><div class="tip"></div>
+    </div>
+    <p class="note">Gain to date = value of what's held on that day + all cash received − all cash paid. The comparator line shows the same cash flows invested in the comparator instead. This chart is always in £; the % view applies to the tiles and tables.</p>
+
+    <h3>All comparators</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th class="l">Alternative</th><th>Its value now</th><th>Its gain</th><th>Its IRR</th><th>You vs it (£)</th><th>You vs it (% a year)</th></tr></thead>
+      <tbody><tr><td class="l"><b>This gilt</b></td><td>${fmtGBP(A.value)}</td><td class="${signCls(A.gain)}">${fmtSignedGBP(A.gain)}</td><td>${fmtPct(A.irr)}</td><td></td><td></td></tr>${scoreRows}</tbody></table></div>
+
+    <h3>Transactions and income</h3>
+    <div class="tablewrap"><table>
+      <thead><tr><th class="l">Date</th>${hs.length>1||S.settings.holder==="all"?`<th class="l">Holder</th>`:""}<th class="l">Type</th><th>HL price</th><th>Market mid</th><th>Nominal</th><th>Cash flow</th><th class="l">Reference</th></tr></thead>
+      <tbody>${txRows}</tbody></table></div>
+    <p class="note">HL price is the dealing price before accrued interest. Market mid is the clean mid price from gilt_yields.json for that day, so the gap shows roughly what you paid in spread.</p>
+    ${methodNote()}`;
+
+  $("#d-sec").onchange = e => { S.settings.detailSec = e.target.value; persist(); renderAll(); };
+  $("#d-price").onchange = e => { const v = parseFloat(e.target.value); if(isFinite(v)) S.overrides[sid] = { price:v, date:dnToIso(vDn) }; else delete S.overrides[sid]; persist(); renderAll(); };
+  const pcl = $("#d-price-clear"); if(pcl) pcl.onclick = () => { delete S.overrides[sid]; persist(); renderAll(); };
+  $("#pc-field").onclick = e => { const b = e.target.closest("button[data-f]"); if(!b) return; S.settings.priceField = b.dataset.f; persist(); drawPriceChart(hs, gilt, vDn); };
+  drawPriceChart(hs, gilt, vDn);
+  drawGainChart(hs, vDn, cid);
+}
+
+/* =====================================================================
+   SVG charts (no libraries)
+   ===================================================================== */
+const SVGNS = "http://www.w3.org/2000/svg";
+function svgEl(tag, attrs, parent){ const e = document.createElementNS(SVGNS, tag); for(const k in attrs) e.setAttribute(k, attrs[k]); if(parent) parent.appendChild(e); return e; }
+function niceTicks(lo, hi, n){
+  const span = hi-lo || 1, step0 = span/n, mag = Math.pow(10, Math.floor(Math.log10(step0)));
+  const step = [1,2,2.5,5,10].map(m=>m*mag).find(s => s >= step0) || mag*10;
+  const out = []; for(let v = Math.ceil(lo/step)*step; v <= hi+1e-9; v += step) out.push(+v.toFixed(10)); return out;
+}
+function timeTicks(x0, x1){
+  const yrs = (x1-x0)/365.25, out = [];
+  const d0 = new Date(x0*DAY), d1 = new Date(x1*DAY);
+  if(yrs > 2.5){ for(let y = d0.getUTCFullYear()+1; y <= d1.getUTCFullYear(); y++) out.push([Date.UTC(y,0,1)/DAY, String(y)]); }
+  else { const stepM = yrs > 1.2 ? 6 : yrs > 0.5 ? 3 : 1; let d = new Date(Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth()+1, 1));
+    while(d <= d1){ if(d.getUTCMonth() % stepM === 0) out.push([d.getTime()/DAY, d.getUTCMonth()===0 ? String(d.getUTCFullYear()) : `${MONTHS[d.getUTCMonth()]} ${String(d.getUTCFullYear()).slice(2)}`]); d = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 1)); } }
+  return out;
+}
+/* Generic line chart. cfg: {series:[{name,color,pts:[[x,y]]}], markers:[{x,y,shape,label,html}], yFmt, tipFmt(x, vals), zero, W, Hh} */
+function lineChart(svg, cfg){
+  // size the drawing to the card so text stays legible on phones
+  if(!svg.dataset.h) svg.dataset.h = svg.getAttribute("viewBox").split(" ")[3];
+  const W = Math.round(Math.min(900, Math.max(340, (svg.parentElement.clientWidth || 900) - 24)));
+  const Hh = Math.round(+svg.dataset.h * (W < 600 ? 0.8 : 1));
+  svg.setAttribute("viewBox", `0 0 ${W} ${Hh}`);
+  const m = { l: W<600 ? 48 : 64, r:12, t:12, b: cfg.bottomBand ? 46 : 28 };
+  svg.innerHTML = "";
+  const all = cfg.series.flatMap(s => s.pts);
+  if(!all.length){ svgEl("text",{x:W/2,y:Hh/2,"text-anchor":"middle"},svg).textContent = "No data for this period"; return; }
+  let x0 = cfg.xRange ? cfg.xRange[0] : Math.min(...all.map(p=>p[0])), x1 = cfg.xRange ? cfg.xRange[1] : Math.max(...all.map(p=>p[0]));
+  if(x1===x0) x1 = x0+1;
+  const ys = all.map(p=>p[1]).concat((cfg.markers||[]).filter(k=>k.y!=null).map(k=>k.y)); if(cfg.zero) ys.push(0);
+  let y0 = Math.min(...ys), y1 = Math.max(...ys); const pad = (y1-y0)*0.06 || Math.abs(y1)*0.05 || 1; y0 -= pad; y1 += pad;
+  const yt = niceTicks(y0, y1, 5), ystep = yt.length>1 ? yt[1]-yt[0] : 1;
+  const X = x => m.l + (x-x0)/(x1-x0)*(W-m.l-m.r), Y = y => m.t + (1-(y-y0)/(y1-y0))*(Hh-m.t-m.b);
+  const g = svgEl("g",{},svg);
+  for(const t of yt){ svgEl("line",{x1:m.l,x2:W-m.r,y1:Y(t),y2:Y(t),stroke:"var(--grid)","stroke-width":1},g); svgEl("text",{x:m.l-8,y:Y(t)+4,"text-anchor":"end"},g).textContent = cfg.yFmt(t, ystep); }
+  if(cfg.zero && y0<0 && y1>0) svgEl("line",{x1:m.l,x2:W-m.r,y1:Y(0),y2:Y(0),stroke:"var(--ink-muted)","stroke-width":1},g);
+  for(const [x,lab] of timeTicks(x0,x1)){ svgEl("line",{x1:X(x),x2:X(x),y1:Hh-m.b,y2:Hh-m.b+4,stroke:"var(--line)"},g); svgEl("text",{x:X(x),y:Hh-m.b+16,"text-anchor":"middle"},g).textContent = lab; }
+  svgEl("line",{x1:m.l,x2:W-m.r,y1:Hh-m.b,y2:Hh-m.b,stroke:"var(--line)"},g);
+  for(const s of cfg.series){
+    if(!s.pts.length) continue;
+    let d = ""; s.pts.forEach((p,i) => { d += (i?"L":"M")+X(p[0]).toFixed(1)+","+Y(p[1]).toFixed(1); });
+    svgEl("path",{d, fill:"none", stroke:s.color, "stroke-width":2, "stroke-linejoin":"round", "stroke-linecap":"round", "stroke-dasharray":s.dash||""},g);
+  }
+  // crosshair layer
+  const cross = svgEl("line",{y1:m.t,y2:Hh-m.b,stroke:"var(--ink-muted)","stroke-width":1,"stroke-dasharray":"3 3",visibility:"hidden"},svg);
+  const dots = cfg.series.map(s => svgEl("circle",{r:4,fill:s.color,stroke:"var(--surface)","stroke-width":2,visibility:"hidden"},svg));
+  const tip = svg.parentElement.querySelector(".tip");
+  const showTip = (html, px, py) => {
+    tip.innerHTML = html; tip.style.display = "block";
+    const box = svg.getBoundingClientRect(), card = svg.parentElement.getBoundingClientRect(), sc = box.width/W;
+    let left = box.left-card.left + px*sc + 12; const tw = tip.offsetWidth;
+    if(left + tw > card.width - 4) left = box.left-card.left + px*sc - tw - 12;
+    tip.style.left = Math.max(4,left)+"px"; tip.style.top = (box.top-card.top + Math.max(0, py*sc - 20))+"px";
+  };
+  const hide = () => { tip.style.display = "none"; cross.setAttribute("visibility","hidden"); dots.forEach(d=>d.setAttribute("visibility","hidden")); };
+  const overlay = svgEl("rect",{x:m.l,y:m.t,width:W-m.l-m.r,height:Hh-m.t-m.b+(cfg.bottomBand?18:0),fill:"transparent"},svg);
+  const toX = ev => { const b = svg.getBoundingClientRect(); return (ev.clientX-b.left)/b.width*W; };
+  overlay.addEventListener("pointermove", ev => {
+    const px = toX(ev), xv = x0 + (px-m.l)/(W-m.l-m.r)*(x1-x0);
+    const vals = cfg.series.map(s => { const p = lookup(s.pts, xv) || s.pts[0]; return p; });
+    const ref = vals[0]; if(!ref) return;
+    cross.setAttribute("x1",X(ref[0])); cross.setAttribute("x2",X(ref[0])); cross.setAttribute("visibility","visible");
+    vals.forEach((p,i) => { if(!p) return; dots[i].setAttribute("cx",X(p[0])); dots[i].setAttribute("cy",Y(p[1])); dots[i].setAttribute("visibility","visible"); });
+    showTip(cfg.tipFmt(ref[0], vals), X(ref[0]), Y(ref[1]));
+  });
+  overlay.addEventListener("pointerleave", hide);
+  // markers (drawn above the overlay so they get their own hover)
+  for(const k of (cfg.markers||[])){
+    const cx = X(k.x), cy = k.y==null ? Hh-m.b+30 : Y(k.y); let shape;
+    if(k.shape==="up") shape = svgEl("path",{d:`M${cx},${cy-7}L${cx+6.5},${cy+5}L${cx-6.5},${cy+5}Z`, fill:"var(--ink)", stroke:"var(--surface)","stroke-width":1.5},svg);
+    else if(k.shape==="down") shape = svgEl("path",{d:`M${cx},${cy+7}L${cx+6.5},${cy-5}L${cx-6.5},${cy-5}Z`, fill:"var(--surface)", stroke:"var(--ink)","stroke-width":2},svg);
+    else shape = svgEl("path",{d:`M${cx},${cy-5}L${cx+5},${cy}L${cx},${cy+5}L${cx-5},${cy}Z`, fill:"var(--ink-soft)", stroke:"var(--surface)","stroke-width":1},svg);
+    const hit = svgEl("circle",{cx, cy, r:11, fill:"transparent", style:"cursor:pointer"},svg);
+    hit.addEventListener("pointerenter", () => { hide(); showTip(k.html, cx, cy); });
+    hit.addEventListener("pointerleave", hide);
+  }
+  if(cfg.bottomBand) svgEl("text",{x:2,y:Hh-m.b+34,"text-anchor":"start"},svg).textContent = cfg.bottomBand;
+}
+
+function drawPriceChart(hs, gilt, vDn){
+  const svg = $("#pc"), field = S.settings.priceField;
+  document.querySelectorAll("#pc-field button").forEach(b => b.setAttribute("aria-pressed", b.dataset.f===field));
+  if(!gilt){ svg.innerHTML = ""; $("#pc-title").textContent = "No price history available"; $("#pc-legend").innerHTML = ""; return; }
+  const tx = hs.flatMap(h => h.tx.map(t => ({h,t}))).filter(x => isoToDn(x.t.date) <= vDn);
+  const first = tx.length ? Math.min(...tx.map(x=>isoToDn(x.t.date))) : vDn-365;
+  const x0 = Math.max(gilt.series[0][0], addMonthsDn(first, -6)), x1 = vDn;
+  const pts = gilt.series.filter(p => p[0]>=x0 && p[0]<=x1).map(p => field==="yield" ? (p[2]==null?null:[p[0],p[2]]) : (p[1]==null?null:[p[0], p[1] - (/index/i.test(gilt.type)?0:accrued(gilt.coupon,gilt.mat,p[0]))])).filter(Boolean);
+  $("#pc-title").textContent = field==="yield" ? "Gross redemption yield, with your trades" : "Clean price (market mid), with your trades";
+  const markers = tx.map(({h,t}) => {
+    const dn = isoToDn(t.date), mk = giltPrice(gilt, dn, "clean");
+    const who = S.settings.holder==="all" ? `<div class="muted">${esc(holderLabel(h))}</div>` : "";
+    if(t.type==="income") return { x:dn, y:null, shape:"coupon", html:`<b>Coupon ${fmtDate(dn)}</b>${who}<div class="row"><span>Received</span><span>${fmtGBP(t.amount,2)}</span></div>` };
+    const y = field==="yield" ? (mk ? mk.yield : null) : (t.price ?? (mk && mk.clean));
+    return { x:dn, y, shape: t.type==="buy" ? "up" : "down",
+      html:`<b>${t.type==="buy"?"Bought":"Sold"} ${fmtDate(dn)}</b>${who}<div class="row"><span>Nominal</span><span>${fmtNum(t.qty)}</span></div><div class="row"><span>HL price</span><span>${t.price!=null?t.price.toFixed(2):"–"}</span></div>${mk?`<div class="row"><span>Market mid</span><span>${mk.clean.toFixed(2)}</span></div>${mk.yield!=null?`<div class="row"><span>Yield</span><span>${mk.yield.toFixed(2)}%</span></div>`:""}`:""}<div class="row"><span>Cash</span><span>${fmtGBP(Math.abs(t.amount),2)}</span></div>` };
+  }).filter(k => k.shape==="coupon" || k.y!=null);
+  $("#pc-legend").innerHTML = `<span><i class="ln" style="background:var(--series-own)"></i>${field==="yield"?"Yield":"Clean price"}</span>
+    <span><svg width="12" height="12" style="vertical-align:middle;margin-right:4px"><path d="M6,0L12,11L0,11Z" fill="var(--ink)"/></svg>Bought (at HL price)</span>
+    <span><svg width="12" height="12" style="vertical-align:middle;margin-right:4px"><path d="M6,11L11.5,1L0.5,1Z" fill="none" stroke="var(--ink)" stroke-width="1.6"/></svg>Sold</span>
+    <span><svg width="10" height="10" style="vertical-align:middle;margin-right:4px"><path d="M5,0L10,5L5,10L0,5Z" fill="var(--ink-soft)"/></svg>Coupon received</span>`;
+  lineChart(svg, { series:[{ name:field, color:"var(--series-own)", pts }], markers, xRange:[x0,x1], bottomBand:"Coupons",
+    yFmt: (v, step) => v.toFixed(Math.min(2, (String(+step.toFixed(4)).split(".")[1]||"").length)) + (field==="yield"?"%":""),
+    tipFmt: (x, vals) => { const p = gilt.series.find(q=>q[0]===x); const cl = p && p[1]!=null ? p[1]-(/index/i.test(gilt.type)?0:accrued(gilt.coupon,gilt.mat,x)) : null;
+      return `<b>${fmtDate(x)}</b><div class="row"><span>Clean price</span><span>${cl!=null?cl.toFixed(2):"–"}</span></div><div class="row"><span>Yield</span><span>${p&&p[2]!=null?p[2].toFixed(2)+"%":"–"}</span></div>`; } });
+}
+
+function gainSeries(hs, vDn, cid){
+  const flows = hs.flatMap(h => flowsOf(h, vDn).map(f => ({...f, h}))).sort((a,b)=>a.dn-b.dn);
+  if(!flows.length) return { own:[], comp:[] };
+  const gilt = hs[0].gilt, first = flows[0].dn;
+  let dates = gilt ? gilt.series.map(p=>p[0]).filter(d => d>=first && d<=vDn) : [];
+  if(!dates.length || dates[dates.length-1] !== vDn) dates.push(vDn);
+  if(dates[0] !== first) dates.unshift(first);
+  const idxs = hs.map(h => comparatorIndex(cid, h));
+  const starts = flows.map(f => { const i = hs.indexOf(f.h), ix = idxs[i]; const s = ix && ix(f.dn); return s ? s.v : null; });
+  const own = [], comp = []; let compOk = idxs.every(Boolean) && starts.every(v => v!=null);
+  for(const d of dates){
+    let cash = 0, cv = 0, ok = compOk;
+    const endVals = idxs.map(ix => { const e = ix && ix(d); return e ? e.v : null; });
+    flows.forEach((f,i) => { if(f.dn > d) return; cash += f.cash; const e = endVals[hs.indexOf(f.h)]; if(e==null) ok = false; else cv += -f.cash * e / starts[i]; });
+    let value = 0, priced = true;
+    for(const h of hs){ const q = qtyAt(h, d); if(!q) continue; const p = d===vDn ? valuationPrice(h, d) : giltPrice(h.gilt, d, S.settings.basis); if(!p){ priced = false; break; } value += q*p.price/100; }
+    if(priced) own.push([d, cash+value]);
+    if(ok) comp.push([d, cash+cv]);
+  }
+  return { own, comp };
+}
+function drawGainChart(hs, vDn, cid){
+  const { own, comp } = gainSeries(hs, vDn, cid), c = COMPARATORS.find(x=>x.id===cid);
+  $("#gc-legend").innerHTML = `<span><i class="ln" style="background:var(--series-own)"></i>This gilt</span><span><i class="ln" style="background:var(--series-comp)"></i>${esc(c.long())}</span>${comp.length?"":"<span class='muted'>(comparator data not available for this period)</span>"}`;
+  lineChart($("#gc"), { series:[{name:"This gilt", color:"var(--series-own)", pts:own}, {name:c.long(), color:"var(--series-comp)", pts:comp}], zero:true,
+    yFmt: v => (v<0?"−":"")+"£"+(Math.abs(v)>=1000 ? (Math.abs(v)/1000).toFixed(Math.abs(v)>=10000?0:1)+"k" : Math.abs(v).toFixed(0)),
+    tipFmt: (x, vals) => { const a = vals[0], b = vals[1];
+      return `<b>${fmtDate(x)}</b><div class="row"><span><i class="sw" style="background:var(--series-own)"></i>This gilt</span><span>${a?fmtSignedGBP(a[1]):"–"}</span></div>
+        <div class="row"><span><i class="sw" style="background:var(--series-comp)"></i>${esc(c.short)}</span><span>${b?fmtSignedGBP(b[1]):"–"}</span></div>
+        ${a&&b?`<div class="row"><span>Difference</span><span>${fmtSignedGBP(a[1]-b[1])}</span></div>`:""}`; } });
+}
+
+/* --------------------------- Data tab ----------------------------- */
+function renderData(){
+  const el = $("#tab-data");
+  const files = [...S.files].sort((a,b)=> (a.client+a.secKey+a.kind).localeCompare(b.client+b.secKey+b.kind));
+  const strips = [...M.strips.values()];
+  const mk = (ok, label, detail) => `<tr><td class="l">${ok?"<span class='ok'>●</span>":"<span class='bad'>○</span>"} ${label}</td><td class="l note">${detail}</td></tr>`;
+  el.innerHTML = `
+    <div class="grid2">
+      <div>
+        <h3 style="margin-top:0">Add HL downloads</h3>
+        <div class="drop" id="drop">Drop files here, or <button class="btn primary" id="pick">choose files</button>
+          <div class="note" style="margin-top:8px">HL “Security movements” and “Income history” CSVs. You can also drop a Tradeweb export (e.g. another strip), a Bank of England SONIA CSV, or a backup file.</div></div>
+        <div class="log" id="log"></div>
+      </div>
+      <div>
+        <h3 style="margin-top:0">Market data</h3>
+        <div class="tablewrap"><table><tbody>
+          ${mk(M.gilts.size, "Gilt prices &amp; yields", M.gilts.size ? `${esc(M.status.gilts||"")}, ${M.gilts.size} gilts` : "Not loaded. Open this page from GitHub Pages next to gilt_yields.json, or drop that file here.")}
+          ${mk(strips.length, "Strip prices", strips.length ? strips.map(s=>`${esc(s.name)} (to ${fmtDate(s.series[s.series.length-1][0])})`).join(", ") : "Not loaded. Drop a Tradeweb strip export here.")}
+          ${mk(M.sonia, "SONIA index", M.sonia ? `${esc(M.status.sonia)}, to ${fmtDate(M.sonia[M.sonia.length-1][0])}` : "Not loaded. Download IUDZOS2 as CSV from the Bank of England database and drop it here.")}
+          ${mk(M.curve, "BoE nominal spot curve", M.curve ? `to ${fmtDate(M.curve.dates[M.curve.dates.length-1])}` : "Comes with gilt_yields.json")}
+        </tbody></table></div>
+        <h3>Settings</h3>
+        <div class="controls">
+          <div class="ctl"><span class="lbl">Value holdings at</span><div class="seg" id="s-basis">
+            <button data-b="clean" aria-pressed="${S.settings.basis==="clean"}">Clean price</button><button data-b="dirty" aria-pressed="${S.settings.basis==="dirty"}">Dirty (incl. accrued)</button></div></div>
+        </div>
+        <p class="note">Your spreadsheet values holdings at a clean price (HL's quoted price). Dirty adds the interest that has built up since the last coupon, which is what you'd actually receive on a sale.</p>
+      </div>
+    </div>
+
+    <h3>Loaded files (${files.length})</h3>
+    ${files.length ? `<div class="tablewrap"><table><thead><tr><th class="l">Holder</th><th class="l">Gilt</th><th class="l">File</th><th>Rows</th><th class="l">Matched</th><th></th></tr></thead><tbody>
+      ${files.map(f => { const h = HOLDINGS.find(x=>x.hKey===f.hKey); return `<tr><td class="l">${esc(f.client)}<div class="sub2">${esc(f.account)} · ${esc(f.clientNo)}</div></td><td class="l">${esc(f.secLabel)}</td>
+        <td class="l">${f.kind==="income"?"Income history":"Security movements"}<div class="sub2">${esc(f.filename)}</div></td><td>${f.rows}</td>
+        <td class="l">${h&&h.gilt?`<span class="pill">${esc(h.gilt.isin)}</span>`:"<span class='bad'>no market data</span>"}</td>
+        <td><button class="linkbtn" data-rm="${esc(f.id)}">Remove</button></td></tr>`; }).join("")}
+      </tbody></table></div>` : `<p class="note">None yet.</p>`}
+
+    <h3>Backup</h3>
+    <p class="note">Everything you load is kept only in this browser on this device. It isn't uploaded anywhere, and it doesn't go into the GitHub repo. To move it to another device, or to keep a copy, save a backup and drop it here on the other device.</p>
+    <div class="controls"><button class="btn" id="b-export">Save backup</button><button class="btn" id="b-csv">Export overview as CSV</button><button class="btn" id="b-clear">Clear all my data</button></div>`;
+  bindDrop($("#drop"), $("#pick"));
+  el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { removeFile(b.dataset.rm); persist(); renderAll(); });
+  $("#s-basis").onclick = e => { const b = e.target.closest("button[data-b]"); if(!b) return; S.settings.basis = b.dataset.b; persist(); renderAll(); };
+  $("#b-export").onclick = () => download(`gilt-holdings-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ app:"gilt-holdings", version:1, savedAt:new Date().toISOString(), state:S }), "application/json");
+  $("#b-csv").onclick = exportCSV;
+  $("#b-clear").onclick = () => { if(confirm("Remove every loaded file, price override and setting from this browser? Save a backup first if you might want them back.")){ S = { files:[], tx:{}, overrides:{}, uploads:{strips:{},sonia:null}, settings:{...DEFAULT_SETTINGS} }; persist(); location.reload(); } };
+  if(lastLog.length) $("#log").innerHTML = lastLog.map(([c,t]) => `<div class="${c}">${c==="ok"?"✓":"✗"} ${esc(t)}</div>`).join("");
+}
+let lastLog = [];
+function bindDrop(zone, pickBtn){
+  if(!zone) return;
+  const input = document.createElement("input"); input.type = "file"; input.multiple = true; input.accept = ".csv,.json,.txt"; input.hidden = true; zone.appendChild(input);
+  pickBtn.onclick = e => { e.preventDefault(); input.click(); };
+  input.onchange = async () => { lastLog = await handleFiles([...input.files]); input.value = ""; if(currentTab()!=="data" && lastLog.some(l=>l[0]==="bad")) setTab("data"); else renderAll(); };
+  zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
+  zone.addEventListener("dragleave", () => zone.classList.remove("over"));
+  zone.addEventListener("drop", async e => { e.preventDefault(); zone.classList.remove("over"); lastLog = await handleFiles([...e.dataTransfer.files]); renderAll(); });
+}
+function restoreBackup(o){
+  const st = o.state || {};
+  S.files = st.files || []; S.tx = st.tx || {}; S.overrides = st.overrides || {}; S.uploads = { strips:{}, sonia:null, ...(st.uploads||{}) }; S.settings = { ...DEFAULT_SETTINGS, ...(st.settings||{}) };
+  for(const [isin, s] of Object.entries(S.uploads.strips)) addStrip(isin, s.name, s.mat, s.series, "uploaded");
+  if(!M.sonia && S.uploads.sonia) ingestSonia(S.uploads.sonia, "uploaded");
+}
+function download(name, text, type){ const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text],{type})); a.download = name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000); }
+function exportCSV(){
+  const vDn = valDn(HOLDINGS), q = s => `"${String(s).replace(/"/g,'""')}"`;
+  const head = ["Holder","Account","Gilt","ISIN","Valuation date","Nominal held","Net invested","Income","Value","Your gain","Your IRR"];
+  COMPARATORS.forEach(c => head.push(`${c.long()} value`, `${c.long()} gain`, `${c.long()} IRR`, `You vs ${c.short} (£)`));
+  const lines = [head.map(q).join(",")];
+  for(const h of HOLDINGS){
+    const a = analyse(h, vDn); const r = [h.client, h.account, h.secLabel, h.gilt?h.gilt.isin:"", dnToIso(vDn), a.qty, a.netInvested.toFixed(2), a.income.toFixed(2), a.value==null?"":a.value.toFixed(2), a.gain==null?"":a.gain.toFixed(2), a.irr==null?"":(a.irr*100).toFixed(3)+"%"];
+    COMPARATORS.forEach(c => { const x = a.comps[c.id]; if(!x||x.missing) r.push("","","",""); else r.push(x.value.toFixed(2), x.gain.toFixed(2), (x.irr*100).toFixed(3)+"%", x.diff==null?"":x.diff.toFixed(2)); });
+    lines.push(r.map(q).join(","));
+  }
+  download(`gilt-holdings-${dnToIso(vDn)}.csv`, lines.join("\r\n"), "text/csv");
+}
+
+/* --------------------------- tabs & boot -------------------------- */
+function currentTab(){ const b = document.querySelector(".tabs button[aria-selected='true']"); return b ? b.dataset.tab : "overview"; }
+function setTab(t){
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t));
+  ["overview","detail","data"].forEach(k => $("#tab-"+k).hidden = k!==t);
+  try{ localStorage.setItem(KEY+"-tab", t); }catch(e){}
+  renderAll();
+}
+function renderAll(){
+  HOLDINGS = buildHoldings();
+  if(M.loaded && S.settings.comparator && !comparatorAvailable(S.settings.comparator)){ const f = COMPARATORS.find(c=>comparatorAvailable(c.id)); if(f) S.settings.comparator = f.id; }
+  renderControls();
+  banner(M.loaded && !M.gilts.size ? "Market price data (gilt_yields.json) couldn't be loaded, so there are no price charts or automatic valuations. Open this page from your GitHub Pages site, or drop gilt_yields.json on the Data tab." : "");
+  const t = currentTab();
+  if(t==="overview") renderOverview(); else if(t==="detail") renderDetail(); else renderData();
+  if(!$("#footer").textContent || M.loaded) setStatusLine(M.gilts.size ? `Market data: ${M.status.gilts}.` : "");
+}
+let resizeT = null, lastW = window.innerWidth;
+window.addEventListener("resize", () => { if(Math.abs(window.innerWidth-lastW) < 40) return; lastW = window.innerWidth; clearTimeout(resizeT); resizeT = setTimeout(() => { if(currentTab()==="detail") renderAll(); }, 200); });
+document.querySelector(".tabs").onclick = e => { const b = e.target.closest("button[data-tab]"); if(b) setTab(b.dataset.tab); };
+document.addEventListener("dragover", e => e.preventDefault());
+document.addEventListener("drop", async e => { if(e.target.closest && e.target.closest(".drop")) return; e.preventDefault(); if(e.dataTransfer.files.length){ lastLog = await handleFiles([...e.dataTransfer.files]); setTab(lastLog.some(l=>l[0]==="bad") ? "data" : currentTab()); } });
+
+(async function boot(){
+  loadState();
+  let t = "overview"; try{ t = localStorage.getItem(KEY+"-tab") || "overview"; }catch(e){}
+  document.querySelectorAll(".tabs button").forEach(b => b.setAttribute("aria-selected", b.dataset.tab===t));
+  ["overview","detail","data"].forEach(k => $("#tab-"+k).hidden = k!==t);
+  renderAll();
+  await loadMarket();
+  renderAll();
+})();
+</script>
+</body>
+</html>
