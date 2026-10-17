@@ -111,6 +111,8 @@
   .drop{ border:2px dashed var(--line); border-radius:8px; padding:22px; text-align:center; background:var(--paper-panel); }
   .drop.over{ border-color:var(--accent); background:var(--hover); }
   .grid2{ display:grid; grid-template-columns:1fr; gap:16px; }
+  .grid2 > *{ min-width:0; }
+  .log, .drop{ overflow-wrap:anywhere; }
   @media (min-width:900px){ .grid2{ grid-template-columns:1fr 1fr; } }
   details{ background:var(--paper-panel); border:1px solid var(--line); border-radius:6px; padding:8px 12px; margin-top:16px; }
   details summary{ cursor:pointer; font-weight:600; }
@@ -127,7 +129,7 @@
 <body>
 <header>
   <h1>Gilt Holdings Analyser</h1>
-  <p>Collates Hargreaves Lansdown transaction and income downloads for each family member's gilts. It works out what each holding has earned, in £ and as an annual rate, and compares it with what the same money would have earned in a strip, in cash at SONIA or at a fixed rate.</p>
+  <p>Collates Hargreaves Lansdown and Barclays transaction and income downloads for each family member's gilts. It works out what each holding has earned, in £ and as an annual rate, and compares it with what the same money would have earned in a strip, in cash at SONIA or at a fixed rate.</p>
 </header>
 <main>
   <div class="tabs" role="tablist">
@@ -210,9 +212,10 @@ function irr(flows, terminal, vDn){
    ===================================================================== */
 const KEY = "gilt-holdings-v1";
 const DEFAULT_SETTINGS = { comparator:"strip", stripIsin:null, mode:"money", fixedRate:4.5, basis:"clean", valDate:null, holder:"all", priceField:"price", detailSec:null };
-let S = { files:[], tx:{}, overrides:{}, uploads:{ strips:{}, sonia:null }, settings:{...DEFAULT_SETTINGS} };
+const freshState = () => ({ files:[], tx:{}, overrides:{}, names:{}, uploads:{ strips:{}, sonia:null }, settings:{...DEFAULT_SETTINGS} });
+let S = freshState();
 function loadState(){
-  try{ const raw = localStorage.getItem(KEY); if(raw){ const o = JSON.parse(raw); S = { ...S, ...o, settings:{...DEFAULT_SETTINGS, ...(o.settings||{})}, uploads:{ strips:{}, sonia:null, ...(o.uploads||{}) } }; } }catch(e){}
+  try{ const raw = localStorage.getItem(KEY); if(raw){ const o = JSON.parse(raw); S = { ...S, ...o, names:{...(o.names||{})}, settings:{...DEFAULT_SETTINGS, ...(o.settings||{})}, uploads:{ strips:{}, sonia:null, ...(o.uploads||{}) } }; } }catch(e){}
 }
 function persist(){ try{ localStorage.setItem(KEY, JSON.stringify(S)); }catch(e){ banner("Couldn't save to this browser's storage. Your changes will be lost when you close the page.", true); } }
 
@@ -389,6 +392,139 @@ function removeFile(id){
   for(const [k,t] of Object.entries(S.tx)){ t.srcs = t.srcs.filter(s => s!==id); if(!t.srcs.length) delete S.tx[k]; }
 }
 
+
+/* ---------- Barclays Investments (Smart Investor) account history ----------
+   One cash ledger for the whole account: Date | Details | Account | Paid In | Withdrawn.
+   Gilt lines look like
+     "Order Id 47896515 - Sold 100,000 UK(GOVT OF) 0.625% BDS 31/07/35 GBP1000 @ GBP 0.6901"
+     "Online transaction fee UK(GOVT OF) 0.625% BDS 31/07/35 GBP1000 Sell"
+     "Net Interest: UK(GOVT OF) 31/07/2035 0.3125%"   (the % is the payment per £100, not the coupon)
+     "FullRedemption of UK(GOVT OF) 0.25% BDS 31/01/25 GBP1000 @ GBP 1.0000 per share"
+   Everything else (cash transfers, payments in, account fees) isn't tied to a gilt. */
+function bxDate(v){
+  if(typeof v === "number" && isFinite(v)) return dnToIso(Math.round(v) - 25569);   // Excel serial date
+  if(v instanceof Date) return dnToIso(Math.round(Date.UTC(v.getFullYear(), v.getMonth(), v.getDate())/DAY));
+  const s = String(v||"").trim(); const u = ukToIso(s); if(u) return u;
+  if(/^\d{4}-\d{2}-\d{2}/.test(s)) return s.slice(0,10);
+  const t = Date.parse(s+" UTC"); return isNaN(t) ? null : new Date(t).toISOString().slice(0,10);
+}
+function bxSecurity(text){
+  const m = /(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/.exec(text); if(!m) return null;
+  const yr = m[3].length===2 ? "20"+m[3] : m[3];
+  const matIso = `${yr}-${m[2].padStart(2,"0")}-${m[1].padStart(2,"0")}`;
+  const c = /(\d+(?:\.\d+)?)\s*%/.exec(text);
+  const il = /IDX|LKD|INDEX|I\/L/i.test(text);
+  return { matIso, coupon: c ? parseFloat(c[1]) : null, il, raw:text.trim() };
+}
+function isBarclaysTable(rows){ return rows.slice(0,15).some(r => r && /^date$/i.test(String(r[0]||"").trim()) && r.some(c => /^details$/i.test(String(c||"").trim())) && r.some(c => /paid\s*in/i.test(String(c||"")))); }
+function parseBarclays(rows, sheetName){
+  const hi = rows.findIndex(r => r && /^date$/i.test(String(r[0]||"").trim()) && r.some(c => /^details$/i.test(String(c||"").trim())));
+  const hdr = rows[hi].map(c => String(c||"").trim().toLowerCase());
+  const iD = 0, iDet = hdr.indexOf("details"), iIn = hdr.findIndex(h=>/paid\s*in/.test(h)), iOut = hdr.findIndex(h=>/withdrawn|paid\s*out/.test(h));
+  const title = [sheetName, ...rows.slice(0,hi).flat()].map(x=>String(x||"")).join(" ");
+  const am = /\b([A-Z]{1,3}\d{5,}(?:-\d{3})?)\b/.exec(title);
+  const accountId = am ? am[1] : (sheetName || "Barclays");
+  const out = { accountId, trades:[], interest:[], other:[], acctFees:0, skipped:0 };
+  const n = v => { if(v==null||v==="") return 0; const x = typeof v==="number" ? v : parseFloat(String(v).replace(/[£,\s]/g,"")); return isFinite(x) ? x : 0; };
+  for(const r of rows.slice(hi+1)){
+    if(!r || r[iD]==null || r[iDet]==null) continue;
+    const date = bxDate(r[iD]); if(!date) continue;
+    const det = String(r[iDet]).trim(), cash = Math.abs(n(r[iIn])) - Math.abs(n(r[iOut]));   // + received, − paid
+    let m;
+    if((m = /Order Id\s*(\S+)\s*-\s*(Bought|Sold)\s+([\d,.]+)\s+UK\s*\(GOVT OF\)\s*(.*?)\s*@\s*GBP\s*([\d.]+)/i.exec(det))){
+      const sec = bxSecurity(m[4]); if(!sec){ out.other.push(det); continue; }
+      out.trades.push({ date, type: /bought/i.test(m[2]) ? "buy" : "sell", ref:"Order "+m[1], qty:parseFloat(m[3].replace(/,/g,"")), quoted:parseFloat(m[5])*100, cash, sec, det });
+    }else if((m = /(FullRedemption|Redemption|Takeover|Maturity)\s+of\s+UK\s*\(GOVT OF\)\s*(.*?)\s*@\s*GBP\s*([\d.]+)/i.exec(det))){
+      const sec = bxSecurity(m[2]); const px = parseFloat(m[3]) || 1;
+      out.trades.push({ date, type:"sell", ref:m[1], qty: Math.round(Math.abs(cash)/px*100)/100, quoted:px*100, cash, sec, det, redemption:true });
+    }else if((m = /transaction fee\s+UK\s*\(GOVT OF\)\s*(.*?)\s*(Buy|Sell)?\s*$/i.exec(det))){
+      const sec = bxSecurity(m[1]); if(!sec){ out.other.push(det); continue; }
+      out.trades.push({ date, type:"fee", ref:"Dealing fee", qty:0, quoted:null, cash, sec, det });
+    }else if((m = /Interest:?\s*UK\s*\(GOVT OF\)\s*(\d{1,2}\/\d{1,2}\/\d{2,4})\s*([\d.]+)\s*%/i.exec(det))){
+      out.interest.push({ date, cash, sec: bxSecurity(m[1]), rate: parseFloat(m[2]), det });
+    }else if(/customer fee|fee on investment|top up to minimum/i.test(det)){ out.acctFees += -cash; }
+    else out.skipped++;
+  }
+  return out;
+}
+const secKeyOf = sec => `${sec.coupon!=null && !sec.il ? sec.coupon : "?"}|${sec.matIso}|${sec.il?"IL":"C"}`;
+function importBarclays(px, filename){
+  const holderKey = `BIA:${px.accountId}|Barclays Investment Account`;
+  const uploadId = `${holderKey}|history`;   // one id per account: later downloads extend the same history
+  // one entry per gilt, keyed by maturity date (Barclays writes the same gilt several ways, e.g. "22/10/50" and "0.6250% 22/10/2050")
+  const secs = new Map();
+  const secFor = sec => {
+    let e = secs.get(sec.matIso);
+    if(!e){ e = { ...sec }; secs.set(sec.matIso, e); }
+    if(e.coupon==null && sec.coupon!=null) e.coupon = sec.coupon;
+    if(sec.il) e.il = true;
+    return e;
+  };
+  // seed with gilts this account already has from earlier downloads
+  for(const f of S.files) if(f.holderKey===holderKey && f.matIso) secFor({ matIso:f.matIso, coupon:f.coupon, il:f.il });
+  px.trades.forEach(t => t.sec = secFor(t.sec));
+  // holdings timeline, used to work out which gilt an interest payment belongs to
+  const prior = Object.values(S.tx).filter(t => t.holderKey===holderKey);
+  const qtyOn = (matIso, dn) => {
+    let q = 0;
+    for(const t of px.trades) if(t.sec.matIso===matIso && isoToDn(t.date) <= dn) q += t.type==="buy" ? t.qty : t.type==="sell" ? -t.qty : 0;
+    for(const t of prior) if(t.matIso===matIso && isoToDn(t.date) <= dn) q += t.type==="buy" ? t.qty : t.type==="sell" ? -t.qty : 0;
+    return q;
+  };
+  const couponDayGap = (matIso, dn) => { const T = isoToDn(matIso); let best = 1e9; for(let k=-80;k<=2;k++){ const c = addMonthsDn(T, 6*k); best = Math.min(best, Math.abs(c-dn)); } return best; };
+  const unmatched = [], guessed = [];
+  for(const it of px.interest){
+    const dn = isoToDn(it.date);
+    let target = it.sec && secs.get(it.sec.matIso);
+    if(!target){
+      // Barclays sometimes prints the wrong maturity on interest lines: fall back to a gilt held around the payment
+      // date whose half-coupon equals the rate shown and whose coupon dates fall on this date.
+      const cands = [...secs.values()].filter(e => (qtyOn(e.matIso, dn) > 0 || qtyOn(e.matIso, dn-14) > 0) && couponDayGap(e.matIso, dn) <= 7);
+      const byRate = cands.filter(e => e.coupon!=null && !e.il && Math.abs(e.coupon/2 - it.rate) < 1e-4);
+      const pick = byRate.length===1 ? byRate[0] : cands.length===1 ? cands[0] : null;
+      if(pick){ target = pick; guessed.push(`${fmtDate(dn)} ${fmtGBP(it.cash,2)}: "${it.det}" assigned to the ${pick.coupon!=null?pick.coupon+"% ":""}${pick.matIso.slice(0,4)}`); }
+      else if(it.sec && (!M.gilts.size || [...M.gilts.values()].some(g => dnToIso(g.mat)===it.sec.matIso))){
+        // a gilt with no trades in this file (bought before the history starts)
+        const r2 = it.rate*2; const conv = Math.abs(r2/0.125 - Math.round(r2/0.125)) < 1e-6;
+        target = secFor({ matIso:it.sec.matIso, coupon: conv ? r2 : null, il: !conv });
+      }
+    }
+    if(!target){ unmatched.push(`${fmtDate(dn)} ${fmtGBP(it.cash,2)}: ${it.det}`); continue; }
+    px.trades.push({ date:it.date, type:"income", ref:"INT", qty:0, quoted:null, cash:it.cash, sec:target, det:it.det });
+  }
+  // write transactions; repeated identical lines on one day are kept apart by their occurrence number
+  let added = 0, dup = 0; const seen = new Map(), counts = new Map();
+  for(const t of px.trades){
+    const sk = secKeyOf(t.sec), hKey = `${holderKey}|${sk}`;
+    const base = [hKey, t.date, t.type, t.ref, Math.round(t.cash*100), t.qty].join("|");
+    const k = (seen.get(base)||0) + 1; seen.set(base, k);
+    const id = base + "#" + k;
+    const amount = t.type==="income" ? t.cash : -t.cash;   // app convention: buys/fees positive, sales negative, income positive
+    const price = t.quoted;
+    counts.set(hKey, (counts.get(hKey)||0) + 1);
+    if(S.tx[id]){ dup++; if(!S.tx[id].srcs.includes(uploadId)) S.tx[id].srcs.push(uploadId); continue; }
+    S.tx[id] = { id, hKey, holderKey, secKey:sk, matIso:t.sec.matIso, date:t.date, type:t.type, typeRaw:t.det, ref:t.ref, desc:t.det, price, qty:t.qty, amount, srcs:[uploadId] };
+    added++;
+  }
+  for(const e of secs.values()){
+    const sk = secKeyOf(e), hKey = `${holderKey}|${sk}`;
+    if(!counts.has(hKey)) continue;
+    const prev = S.files.find(f => f.id===uploadId && f.hKey===hKey);
+    if(prev){ prev.filename = filename; prev.rows = Object.values(S.tx).filter(t => t.hKey===hKey).length; prev.importedAt = new Date().toISOString(); continue; }
+    const label = parseSecurity(`Treasury ${e.coupon!=null?e.coupon+"% ":""}${e.matIso.split("-").reverse().join("/")}${e.il?" Index-Linked":""}`).label;
+    S.files.push({ id:uploadId, filename, kind:"both", hKey, holderKey, secKey:sk, security:e.raw||label, secLabel:label, coupon:e.coupon, matIso:e.matIso, il:e.il,
+                   client:"", clientNo:px.accountId, account:"Barclays Investment Account", provider:"Barclays", rows:counts.get(hKey), added, importedAt:new Date().toISOString() });
+  }
+  if(!S.names[holderKey]) S.names[holderKey] = "";
+  return { added, dup, gilts:[...counts.keys()].length, unmatched, guessed, acctFees:px.acctFees, holderKey };
+}
+let XLSXlib = null;
+async function loadXLSX(){
+  if(XLSXlib) return XLSXlib;
+  await new Promise((res, rej) => { const sc = document.createElement("script"); sc.src = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"; sc.onload = res; sc.onerror = () => rej(new Error("couldn't load the spreadsheet reader (are you offline?). Save the file as CSV and drop that instead.")); document.head.appendChild(sc); });
+  XLSXlib = window.XLSX; return XLSXlib;
+}
+
 async function readFileText(file){
   const buf = await file.arrayBuffer();
   const utf = new TextDecoder("utf-8", {fatal:false}).decode(buf);
@@ -402,12 +538,25 @@ async function handleFiles(fileList){
     try{
       if(/\.json$/i.test(file.name)){
         const o = JSON.parse(await readFileText(file));
-        if(o && o.app==="gilt-holdings"){ restoreBackup(o); log.push(["ok", `${file.name}: backup restored (${Object.keys(S.tx).length} transactions).`]); continue; }
+        if(o && o.app==="gilt-holdings"){ const r = mergeBackup(o); log.push(["ok", `${file.name}: added ${r.people.join(", ") || "backup"} (${r.added} new transactions${r.dup?`, ${r.dup} already loaded`:""}).`]); continue; }
         if(o && Array.isArray(o.securities)){ ingestGiltYields(o, file.name+" (uploaded, this visit only)"); log.push(["ok", `${file.name}: market data loaded for this visit.`]); continue; }
         if(o && Array.isArray(o.data) && /IUDZOS2/.test(o.series_code||"")){ S.uploads.sonia = o.data; ingestSonia(o.data, file.name+" (uploaded)"); log.push(["ok", `${file.name}: SONIA index loaded.`]); continue; }
         throw new Error("JSON file not recognised");
       }
+      if(/\.xlsx?$/i.test(file.name)){
+        const X = await loadXLSX(); const wb = X.read(await file.arrayBuffer(), { type:"array" });
+        let done = false;
+        for(const name of wb.SheetNames){
+          const rows = X.utils.sheet_to_json(wb.Sheets[name], { header:1, raw:true, defval:null });
+          if(!isBarclaysTable(rows)) continue;
+          log.push(...barclaysLog(file.name, importBarclays(parseBarclays(rows, name), file.name))); done = true;
+        }
+        if(!done) throw new Error("no Barclays-style table (Date, Details, Paid In, Withdrawn) found in this spreadsheet");
+        continue;
+      }
       const text = await readFileText(file);
+      const csvRows = text.split(/\r?\n/).slice(0,400).map(splitCSV);
+      if(isBarclaysTable(csvRows)){ const all = text.split(/\r?\n/).map(splitCSV); log.push(...barclaysLog(file.name, importBarclays(parseBarclays(all, file.name), file.name))); continue; }
       const hl = parseHL(text);
       if(hl){
         const r = importHL(hl, file.name);
@@ -421,10 +570,18 @@ async function handleFiles(fileList){
         continue;
       }
       if(/IUDZOS2/i.test(text.slice(0,2000))){ const arr = parseBoeSonia(text); S.uploads.sonia = arr; ingestSonia(arr, file.name+" (uploaded)"); log.push(["ok", `${file.name}: ${arr.length} SONIA index values.`]); continue; }
-      throw new Error("not an HL, Tradeweb or Bank of England file");
+      throw new Error("not an HL, Barclays, Tradeweb or Bank of England file");
     }catch(e){ log.push(["bad", `${file.name}: ${e.message}`]); }
   }
   persist(); renderAll(); return log;
+}
+
+function barclaysLog(fname, r){
+  const out = [["ok", `${fname}: Barclays account ${r.holderKey.split("|")[0].slice(4)}. ${r.gilts} gilts, ${r.added} new rows${r.dup?`, ${r.dup} already loaded`:""}.${r.acctFees ? ` Account charges of ${fmtGBP(r.acctFees,2)} aren't tied to any one gilt, so they're left out.` : ""}`]];
+  r.guessed.forEach(g => out.push(["ok", `Interest line with an unrecognised gilt date, matched by coupon and date: ${g}.`]));
+  r.unmatched.forEach(u => out.push(["bad", `Couldn't tell which gilt this interest belongs to, so it's left out: ${u}`]));
+  if(!S.names[r.holderKey]) out.push(["ok", "Barclays files don't include the account holder's name, so add it under Family members below."]);
+  return out;
 }
 
 /* =====================================================================
@@ -434,24 +591,35 @@ function buildHoldings(){
   const by = new Map();
   for(const f of S.files){
     if(!by.has(f.hKey)) by.set(f.hKey, { hKey:f.hKey, holderKey:f.holderKey, secKey:f.secKey, client:f.client, clientNo:f.clientNo, account:f.account, secLabel:f.secLabel, security:f.security, coupon:f.coupon, matIso:f.matIso, il:f.il, tx:[], hasCapital:false, hasIncome:false });
-    const h = by.get(f.hKey); if(f.kind==="capital") h.hasCapital = true; else h.hasIncome = true;
+    const h = by.get(f.hKey); if(f.kind==="capital" || f.kind==="both") h.hasCapital = true; if(f.kind!=="capital") h.hasIncome = true;
+    if(f.coupon!=null && h.coupon==null) h.coupon = f.coupon; if(f.il) h.il = true; if(f.provider) h.provider = f.provider;
   }
   for(const t of Object.values(S.tx)){ const h = by.get(t.hKey); if(h) h.tx.push(t); }
   for(const h of by.values()){
     h.tx.sort((a,b) => a.date<b.date?-1:a.date>b.date?1:0);
     h.gilt = findGilt(h);
+    if(h.gilt) h.secLabel = giltLabel(h.gilt);
   }
   return [...by.values()];
 }
 function findGilt(h){
   if(!h.matIso) return null;
-  for(const g of M.gilts.values()){
-    if(dnToIso(g.mat)===h.matIso && Math.abs((g.coupon??-1)-h.coupon)<1e-6 && (h.il ? /index/i.test(g.type) : !/index/i.test(g.type))) return g;
-  }
-  return null;
+  const same = [...M.gilts.values()].filter(g => dnToIso(g.mat)===h.matIso);
+  const isIL = g => /index/i.test(g.type);
+  const cpn = g => h.coupon==null || Math.abs((g.coupon??-1)-h.coupon) < 1e-6;
+  // exact match first; then allow the IL flag to be wrong (Barclays omits "IDX/LKD" on some linkers); then maturity alone
+  return same.find(g => cpn(g) && isIL(g)===!!h.il) || same.find(g => cpn(g)) || (same.length===1 ? same[0] : null);
 }
-const holders = hs => { const m = new Map(); hs.forEach(h => { if(!m.has(h.holderKey)) m.set(h.holderKey, { key:h.holderKey, client:h.client, account:h.account }); }); return [...m.values()]; };
-const holderLabel = h => `${h.client.replace(/^(Mr|Mrs|Ms|Miss|Dr)\.?\s+/i,"")}${h.account ? " · "+h.account.replace(/^HL\s+/i,"").replace(/\s+Account$/i,"") : ""}`;
+function giltLabel(g){ const d = new Date(g.mat*DAY); return `${g.coupon}% Treasury${/index/i.test(g.type)?" Index-Linked":""} ${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`; }
+const isILh = h => h.gilt ? /index/i.test(h.gilt.type) : !!h.il;
+/* People and accounts. A person can have several accounts (HL, Barclays, ...); names can be edited on the Data tab. */
+const cleanName = n => String(n||"").replace(/^(Mr|Mrs|Ms|Miss|Dr)\.?\s+/i,"").trim();
+function accountInfo(holderKey){ const f = S.files.find(x => x.holderKey===holderKey) || {}; return { key:holderKey, client:f.client||"", clientNo:f.clientNo||"", account:f.account||"", provider:f.provider || (/^BIA:/.test(holderKey)?"Barclays":"HL") }; }
+function personOf(holderKey){ const n = (S.names||{})[holderKey]; if(n) return n; const a = accountInfo(holderKey); return cleanName(a.client) || `${a.provider} ${a.clientNo}`.trim(); }
+function accountLabel(holderKey){ const a = accountInfo(holderKey); return a.provider==="Barclays" ? `Barclays ${a.clientNo}` : `HL ${a.account.replace(/^HL\s+/i,"").replace(/\s+Account$/i,"")}`.trim(); }
+const holders = hs => { const m = new Map(); hs.forEach(h => { if(!m.has(h.holderKey)) m.set(h.holderKey, { key:h.holderKey, person:personOf(h.holderKey), account:accountLabel(h.holderKey) }); }); return [...m.values()]; };
+const people = hs => [...new Set(hs.map(h => personOf(h.holderKey)))].sort();
+const holderLabel = h => `${personOf(h.key||h.holderKey)} · ${accountLabel(h.key||h.holderKey)}`;
 const secId = h => h.gilt ? h.gilt.isin : h.secKey;
 
 /* Market price per £100 nominal on dn. Returns {price, dirty, yield, dn} or null */
@@ -524,7 +692,8 @@ function analyse(h, vDn){
   const bought = flows.filter(f=>f.t.type==="buy").reduce((s,f)=>s-f.cash,0);
   const sold = flows.filter(f=>f.t.type==="sell").reduce((s,f)=>s+f.cash,0);
   const income = flows.filter(f=>f.t.type==="income").reduce((s,f)=>s+f.cash,0);
-  const out = { h, vDn, flows, qty, vp, value, bought, sold, income, netInvested:bought-sold,
+  const fees = flows.filter(f=>f.t.type==="fee").reduce((s,f)=>s-f.cash,0);
+  const out = { h, vDn, flows, qty, vp, value, bought, sold, income, fees, netInvested:bought+fees-sold,
                 gain: value==null ? null : sumCash + value, irr: value==null ? null : irr(flows, value, vDn), comps:{} };
   for(const c of COMPARATORS) out.comps[c.id] = analyseComparator(c.id, h, flows, vDn, sumCash, value);
   return out;
@@ -546,7 +715,8 @@ function combine(list, vDn){
   const sumCash = flows.reduce((s,f)=>s+f.cash,0);
   const out = { vDn, flows, value, qty:list.reduce((s,a)=>s+a.qty,0), bought:list.reduce((s,a)=>s+a.bought,0), sold:list.reduce((s,a)=>s+a.sold,0), income:list.reduce((s,a)=>s+a.income,0),
                 gain: ok ? sumCash+value : null, irr: ok ? irr(flows, value, vDn) : null, comps:{} };
-  out.netInvested = out.bought - out.sold;
+  out.fees = list.reduce((s,a)=>s+(a.fees||0),0);
+  out.netInvested = out.bought + out.fees - out.sold;
   for(const c of COMPARATORS){
     const cs = list.map(a => a.comps[c.id]);
     if(cs.some(x => !x || x.missing)){ out.comps[c.id] = cs.find(x => x && x.missing) || null; continue; }
@@ -579,14 +749,15 @@ function banner(msg, warn){ $("#banner").innerHTML = msg ? `<div class="warn">${
 function setStatusLine(t){ $("#footer").textContent = t; }
 
 function renderControls(){
-  const st = S.settings, hs = holders(HOLDINGS);
+  const st = S.settings, ppl = people(HOLDINGS);
+  if(st.holder!=="all" && !ppl.includes(st.holder)) st.holder = "all";
   const tab = currentTab();
   const compBtns = COMPARATORS.map(c => `<button data-comp="${c.id}" aria-pressed="${st.comparator===c.id}" ${comparatorAvailable(c.id)?"":"disabled title='Data not loaded'"}>${c.short}</button>`).join("");
   const strips = [...M.strips.values()].sort((a,b)=>a.mat-b.mat);
   const vd = valDn(HOLDINGS), dv = defaultValDate(HOLDINGS);
   $("#controls").innerHTML = tab==="data" ? "" : `
     <div class="ctl"><label for="c-holder">Family member</label>
-      <select id="c-holder"><option value="all">Everyone</option>${hs.map(h=>`<option value="${esc(h.key)}" ${st.holder===h.key?"selected":""}>${esc(holderLabel(h))}</option>`).join("")}</select></div>
+      <select id="c-holder"><option value="all">Everyone</option>${ppl.map(p=>`<option value="${esc(p)}" ${st.holder===p?"selected":""}>${esc(p)}</option>`).join("")}</select></div>
     <div class="ctl"><span class="lbl">Compare with</span><div class="seg" id="c-comp">${compBtns}</div></div>
     ${st.comparator==="strip" && strips.length>1 ? `<div class="ctl"><label for="c-strip">Strip</label><select id="c-strip">${strips.map(s=>`<option value="${s.isin}" ${currentStrip()===s?"selected":""}>${esc(s.name)}</option>`).join("")}</select></div>`:""}
     ${st.comparator==="fixed" ? `<div class="ctl"><label for="c-rate">Rate % a year</label><input id="c-rate" type="number" step="0.05" value="${st.fixedRate}"></div>`:""}
@@ -605,7 +776,7 @@ function renderControls(){
   const rr = $("#c-date-reset"); if(rr) rr.onclick = () => { st.valDate = null; persist(); renderAll(); };
 }
 
-function filtered(){ return HOLDINGS.filter(h => S.settings.holder==="all" || h.holderKey===S.settings.holder); }
+function filtered(){ return HOLDINGS.filter(h => S.settings.holder==="all" || personOf(h.holderKey)===S.settings.holder); }
 
 /* the three headline cells: your result, comparator result, difference */
 function headline(a, cid){
@@ -624,14 +795,16 @@ function renderOverview(){
   const hs = filtered();
   const rows = hs.map(h => analyse(h, vDn));
   const comp = COMPARATORS.find(c=>c.id===cid);
-  const groups = new Map(); rows.forEach(a => { const k = a.h.holderKey; if(!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
+  const groups = new Map(); rows.forEach(a => { const k = personOf(a.h.holderKey); if(!groups.has(k)) groups.set(k, []); groups.get(k).push(a); });
   const total = combine(rows, vDn);
   const T = headline(total, cid);
   const missingPrice = rows.filter(a => a.qty>0 && a.value==null);
+  const negQty = hs.filter(h => h.tx.some((t,i) => t.type==="sell" && qtyAt(h, isoToDn(t.date)) <= 0 && h.tx.filter(x=>x.type==="buy" && x.date<=t.date).reduce((s,x)=>s+x.qty,0) + 0.01 < h.tx.filter(x=>x.type==="sell" && x.date<=t.date).reduce((s,x)=>s+x.qty,0)));
 
   let warn = "";
   if(missingPrice.length) warn += `<div class="warn">No price for ${missingPrice.map(a=>esc(a.h.secLabel)).join(", ")} on ${fmtDate(vDn)}. Enter one on the Gilt detail tab, or load market data on the Data tab.</div>`;
-  const halfLoaded = HOLDINGS.filter(h => !h.hasCapital || !h.hasIncome);
+  const halfLoaded = hs.filter(h => !h.hasCapital || !h.hasIncome);
+  if(negQty.length) warn += `<div class="warn">More has been sold than bought for ${negQty.map(h=>`${esc(h.secLabel)} (${esc(holderLabel(h))})`).join("; ")}. The purchase probably happened before the start of the downloaded history, so these figures are incomplete.</div>`;
   if(halfLoaded.length) warn += `<div class="warn">Only one of the two HL files has been loaded for: ${halfLoaded.map(h=>`${esc(h.secLabel)} (${esc(holderLabel(h))}, missing ${h.hasCapital?"income history":"security movements"})`).join("; ")}. Figures for these holdings will be incomplete.</div>`;
 
   const colHead = money
@@ -646,12 +819,11 @@ function renderOverview(){
       <td class="hlc ${signCls(H.you)}">${H.youTxt}</td><td>${H.themTxt}</td><td class="hlc ${signCls(H.diff)}">${H.diffTxt}</td></tr>`;
   };
   let body = "";
-  for(const [k, list] of groups){
-    const hl = holders(list.map(a=>a.h))[0];
-    if(groups.size>1 || S.settings.holder==="all") body += `<tr class="sub"><td class="l" colspan="8">${esc(holderLabel(hl))}</td></tr>`;
-    list.sort((x,y)=> (x.h.matIso||"").localeCompare(y.h.matIso||""));
-    for(const a of list) body += rowHtml(a, "click", `<span class="gname">${esc(a.h.secLabel)}</span>`, a.h.gilt ? "" : "<span class='bad'>not matched to market data</span>", secId(a.h));
-    if(list.length>1 && groups.size>1) body += rowHtml(combine(list, vDn), "sub", `Total, ${esc(hl.client)}`);
+  for(const [person, list] of [...groups.entries()].sort((a,b)=>a[0].localeCompare(b[0]))){
+    if(groups.size>1 || S.settings.holder==="all") body += `<tr class="sub"><td class="l" colspan="8">${esc(person)}</td></tr>`;
+    list.sort((x,y)=> (x.qty===0)-(y.qty===0) || (x.h.matIso||"").localeCompare(y.h.matIso||"") || accountLabel(x.h.holderKey).localeCompare(accountLabel(y.h.holderKey)));
+    for(const a of list) body += rowHtml(a, "click", `<span class="gname">${esc(a.h.secLabel)}</span>`, `${esc(accountLabel(a.h.holderKey))}${a.h.gilt || !a.qty ? "" : " · <span class='bad'>not matched to market data</span>"}`, secId(a.h));
+    if(list.length>1 && groups.size>1) body += rowHtml(combine(list, vDn), "sub", `Total, ${esc(person)}`);
   }
   body += rowHtml(total, "total", rows.length>1 ? "Total" : "Total");
 
@@ -686,8 +858,8 @@ function methodNote(){
 
 function emptyState(){
   return `<div class="empty"><h2>Load your HL downloads to start</h2>
-    <p>For each gilt, download both the <b>Security movements</b> and the <b>Income history</b> CSV from HL and drop them here. You can drop as many files as you like, for any family member, and loading a file twice won't duplicate anything.</p>
-    <div class="drop" id="drop-empty" style="max-width:560px;margin:16px auto 0">Drop HL CSV files here, or <button class="btn primary" id="pick-empty">choose files</button></div></div>`;
+    <p>Drop in HL downloads (for each gilt, both the <b>Security movements</b> and the <b>Income history</b> CSV), Barclays Investments account histories (.xlsx), or files you've saved from this app. Drop as many as you like, for any family member; loading something twice won't duplicate it.</p>
+    <div class="drop" id="drop-empty" style="max-width:560px;margin:16px auto 0">Drop files here, or <button class="btn primary" id="pick-empty">choose files</button></div></div>`;
 }
 function bindEmpty(el){ bindDrop(el.querySelector("#drop-empty"), el.querySelector("#pick-empty")); }
 
@@ -715,21 +887,22 @@ function renderDetail(){
   }).join("");
 
   const txRows = hs.flatMap(h => h.tx.map(t => ({h,t}))).sort((a,b)=> a.t.date<b.t.date?1:-1).map(({h,t}) => {
-    const dn = isoToDn(t.date), m = t.type!=="income" ? giltPrice(gilt, dn, "clean") : null;
+    const dn = isoToDn(t.date), m = (t.type==="buy"||t.type==="sell") ? giltPrice(gilt, dn, "clean") : null;
+    const shownPx = isILh(h) && t.qty ? Math.abs(t.amount)/t.qty*100 : t.price;
     const cash = t.type==="income" ? t.amount : -t.amount, after = dn > vDn;
     return `<tr class="${after?"muted":""}"><td class="l">${fmtDate(dn)}</td>${hs.length>1||S.settings.holder==="all"?`<td class="l">${esc(holderLabel(h))}</td>`:""}
-      <td class="l">${t.type==="buy"?"Bought":t.type==="sell"?"Sold":t.type==="income"?"Coupon":esc(t.typeRaw)}</td>
-      <td>${t.price!=null?t.price.toFixed(2):""}</td><td>${m && t.type!=="income" ? m.clean.toFixed(2) : ""}</td>
+      <td class="l">${t.type==="buy"?"Bought":t.type==="sell"?(/redemp|takeover|matur/i.test(t.typeRaw||t.ref||"")?"Redeemed":"Sold"):t.type==="income"?"Coupon":t.type==="fee"?"Dealing fee":esc(t.typeRaw)}</td>
+      <td>${shownPx!=null&&t.type!=="fee"&&t.type!=="income"?shownPx.toFixed(2):""}</td><td>${m ? m.clean.toFixed(2) : ""}</td>
       <td>${t.qty?fmtNum(t.qty):""}</td><td class="${signCls(cash)}">${fmtSignedGBP(cash).replace(/^\+?/, cash>0?"+":"")}</td><td class="l muted">${esc(t.ref)}${after?" (after valuation date)":""}</td></tr>`;
   }).join("");
 
   el.innerHTML = `
     <div class="controls" style="margin-bottom:6px">
       <div class="ctl"><label for="d-sec">Gilt</label>${sel}</div>
-      <div class="ctl"><label for="d-price">Valuation price (p per £100)</label>
+      <div class="ctl"><label for="d-price">${isILh(h0)?"Valuation per £100 nominal (incl. indexation)":"Valuation price (p per £100)"}</label>
         <input id="d-price" type="number" step="0.01" style="width:110px" placeholder="${mkt?mkt.clean.toFixed(2):""}" value="${ovActive?ov.price:""}"></div>
       <div class="ctl note" style="padding-bottom:6px">${ovActive ? `Your own price for ${fmtDate(vDn)} is being used. <button class="linkbtn" id="d-price-clear">Use market price</button>` :
-        mkt ? `Leave blank to use the market mid clean price (${mkt.clean.toFixed(2)} on ${fmtDate(mkt.dn)}). Enter HL's sell price to match your sheet.` : "No market price available. Enter a price to value this holding."}
+        mkt ? `Leave blank to use the market mid ${isILh(h0)?"dirty price":"clean price"} (${mkt.clean.toFixed(2)} on ${fmtDate(mkt.dn)}).${isILh(h0)?"":" Enter your broker's sell price to match your spreadsheet."}` : "No market price available. Enter a price to value this holding."}
         ${ov && !ovActive ? `<br>You entered ${ov.price} for ${fmtDate(isoToDn(ov.date))}, which isn't the valuation date, so it isn't used.` : ""}</div>
     </div>
     <h2>${esc(h0.secLabel)}</h2>
@@ -761,9 +934,9 @@ function renderDetail(){
 
     <h3>Transactions and income</h3>
     <div class="tablewrap"><table>
-      <thead><tr><th class="l">Date</th>${hs.length>1||S.settings.holder==="all"?`<th class="l">Holder</th>`:""}<th class="l">Type</th><th>HL price</th><th>Market mid</th><th>Nominal</th><th>Cash flow</th><th class="l">Reference</th></tr></thead>
+      <thead><tr><th class="l">Date</th>${hs.length>1||S.settings.holder==="all"?`<th class="l">Holder</th>`:""}<th class="l">Type</th><th>Dealt price</th><th>Market mid</th><th>Nominal</th><th>Cash flow</th><th class="l">Reference</th></tr></thead>
       <tbody>${txRows}</tbody></table></div>
-    <p class="note">HL price is the dealing price before accrued interest. Market mid is the clean mid price from gilt_yields.json for that day, so the gap shows roughly what you paid in spread.</p>
+    <p class="note">Dealt price is the broker's price per £100 nominal before accrued interest${isILh(h0) ? `. For this index-linked gilt it's the cash paid or received per £100 nominal, including indexation and accrued interest, so it can be compared with the market dirty price` : ""}. Market mid is the ${isILh(h0)?"dirty":"clean"} mid price from gilt_yields.json for that day, so the gap shows roughly what you paid in spread.</p>
     ${methodNote()}`;
 
   $("#d-sec").onchange = e => { S.settings.detailSec = e.target.value; persist(); renderAll(); };
@@ -863,23 +1036,25 @@ function drawPriceChart(hs, gilt, vDn){
   const first = tx.length ? Math.min(...tx.map(x=>isoToDn(x.t.date))) : vDn-365;
   const x0 = Math.max(gilt.series[0][0], addMonthsDn(first, -6)), x1 = vDn;
   const pts = gilt.series.filter(p => p[0]>=x0 && p[0]<=x1).map(p => field==="yield" ? (p[2]==null?null:[p[0],p[2]]) : (p[1]==null?null:[p[0], p[1] - (/index/i.test(gilt.type)?0:accrued(gilt.coupon,gilt.mat,p[0]))])).filter(Boolean);
-  $("#pc-title").textContent = field==="yield" ? "Gross redemption yield, with your trades" : "Clean price (market mid), with your trades";
+  $("#pc-title").textContent = field==="yield" ? (/index/i.test(gilt.type) ? "Real yield, with your trades" : "Gross redemption yield, with your trades") : (/index/i.test(gilt.type) ? "Dirty price incl. indexation (market mid), with your trades" : "Clean price (market mid), with your trades");
   const markers = tx.map(({h,t}) => {
     const dn = isoToDn(t.date), mk = giltPrice(gilt, dn, "clean");
     const who = S.settings.holder==="all" ? `<div class="muted">${esc(holderLabel(h))}</div>` : "";
+    if(t.type==="fee") return null;
     if(t.type==="income") return { x:dn, y:null, shape:"coupon", html:`<b>Coupon ${fmtDate(dn)}</b>${who}<div class="row"><span>Received</span><span>${fmtGBP(t.amount,2)}</span></div>` };
-    const y = field==="yield" ? (mk ? mk.yield : null) : (t.price ?? (mk && mk.clean));
+    const il = /index/i.test(gilt.type), paid = t.qty ? Math.abs(t.amount)/t.qty*100 : null;
+    const y = field==="yield" ? (mk ? mk.yield : null) : (il ? paid : (t.price ?? (mk && mk.clean)));
     return { x:dn, y, shape: t.type==="buy" ? "up" : "down",
-      html:`<b>${t.type==="buy"?"Bought":"Sold"} ${fmtDate(dn)}</b>${who}<div class="row"><span>Nominal</span><span>${fmtNum(t.qty)}</span></div><div class="row"><span>HL price</span><span>${t.price!=null?t.price.toFixed(2):"–"}</span></div>${mk?`<div class="row"><span>Market mid</span><span>${mk.clean.toFixed(2)}</span></div>${mk.yield!=null?`<div class="row"><span>Yield</span><span>${mk.yield.toFixed(2)}%</span></div>`:""}`:""}<div class="row"><span>Cash</span><span>${fmtGBP(Math.abs(t.amount),2)}</span></div>` };
-  }).filter(k => k.shape==="coupon" || k.y!=null);
-  $("#pc-legend").innerHTML = `<span><i class="ln" style="background:var(--series-own)"></i>${field==="yield"?"Yield":"Clean price"}</span>
-    <span><svg width="12" height="12" style="vertical-align:middle;margin-right:4px"><path d="M6,0L12,11L0,11Z" fill="var(--ink)"/></svg>Bought (at HL price)</span>
+      html:`<b>${t.type==="buy"?"Bought":"Sold"} ${fmtDate(dn)}</b>${who}<div class="row"><span>Nominal</span><span>${fmtNum(t.qty)}</span></div><div class="row"><span>Dealt price</span><span>${t.price!=null?t.price.toFixed(2):"–"}</span></div>${il&&paid?`<div class="row"><span>Cash per £100</span><span>${paid.toFixed(2)}</span></div>`:""}${mk?`<div class="row"><span>Market mid</span><span>${mk.clean.toFixed(2)}</span></div>${mk.yield!=null?`<div class="row"><span>Yield</span><span>${mk.yield.toFixed(2)}%</span></div>`:""}`:""}<div class="row"><span>Cash</span><span>${fmtGBP(Math.abs(t.amount),2)}</span></div>` };
+  }).filter(k => k && (k.shape==="coupon" || k.y!=null));
+  $("#pc-legend").innerHTML = `<span><i class="ln" style="background:var(--series-own)"></i>${field==="yield"?"Yield":/index/i.test(gilt.type)?"Dirty price":"Clean price"}</span>
+    <span><svg width="12" height="12" style="vertical-align:middle;margin-right:4px"><path d="M6,0L12,11L0,11Z" fill="var(--ink)"/></svg>Bought (at dealt price)</span>
     <span><svg width="12" height="12" style="vertical-align:middle;margin-right:4px"><path d="M6,11L11.5,1L0.5,1Z" fill="none" stroke="var(--ink)" stroke-width="1.6"/></svg>Sold</span>
     <span><svg width="10" height="10" style="vertical-align:middle;margin-right:4px"><path d="M5,0L10,5L5,10L0,5Z" fill="var(--ink-soft)"/></svg>Coupon received</span>`;
   lineChart(svg, { series:[{ name:field, color:"var(--series-own)", pts }], markers, xRange:[x0,x1], bottomBand:"Coupons",
     yFmt: (v, step) => v.toFixed(Math.min(2, (String(+step.toFixed(4)).split(".")[1]||"").length)) + (field==="yield"?"%":""),
     tipFmt: (x, vals) => { const p = gilt.series.find(q=>q[0]===x); const cl = p && p[1]!=null ? p[1]-(/index/i.test(gilt.type)?0:accrued(gilt.coupon,gilt.mat,x)) : null;
-      return `<b>${fmtDate(x)}</b><div class="row"><span>Clean price</span><span>${cl!=null?cl.toFixed(2):"–"}</span></div><div class="row"><span>Yield</span><span>${p&&p[2]!=null?p[2].toFixed(2)+"%":"–"}</span></div>`; } });
+      return `<b>${fmtDate(x)}</b><div class="row"><span>${/index/i.test(gilt.type)?"Dirty price":"Clean price"}</span><span>${cl!=null?cl.toFixed(2):"–"}</span></div><div class="row"><span>Yield</span><span>${p&&p[2]!=null?p[2].toFixed(2)+"%":"–"}</span></div>`; } });
 }
 
 function gainSeries(hs, vDn, cid){
@@ -917,15 +1092,16 @@ function drawGainChart(hs, vDn, cid){
 /* --------------------------- Data tab ----------------------------- */
 function renderData(){
   const el = $("#tab-data");
-  const files = [...S.files].sort((a,b)=> (a.client+a.secKey+a.kind).localeCompare(b.client+b.secKey+b.kind));
+  const files = [...S.files].sort((a,b)=> (personOf(a.holderKey)+a.secKey+a.kind).localeCompare(personOf(b.holderKey)+b.secKey+b.kind));
+  const accts = [...new Set(S.files.map(f => f.holderKey))].sort((a,b)=>personOf(a).localeCompare(personOf(b)) || accountLabel(a).localeCompare(accountLabel(b)));
   const strips = [...M.strips.values()];
   const mk = (ok, label, detail) => `<tr><td class="l">${ok?"<span class='ok'>●</span>":"<span class='bad'>○</span>"} ${label}</td><td class="l note">${detail}</td></tr>`;
   el.innerHTML = `
     <div class="grid2">
       <div>
-        <h3 style="margin-top:0">Add HL downloads</h3>
+        <h3 style="margin-top:0">Add downloads</h3>
         <div class="drop" id="drop">Drop files here, or <button class="btn primary" id="pick">choose files</button>
-          <div class="note" style="margin-top:8px">HL “Security movements” and “Income history” CSVs. You can also drop a Tradeweb export (e.g. another strip), a Bank of England SONIA CSV, or a backup file.</div></div>
+          <div class="note" style="margin-top:8px">HL “Security movements” and “Income history” CSVs, Barclays Investments transaction downloads (.xlsx or .csv), or saved family files. You can also drop a Tradeweb export (e.g. another strip) or a Bank of England SONIA CSV.</div></div>
         <div class="log" id="log"></div>
       </div>
       <div>
@@ -945,49 +1121,96 @@ function renderData(){
       </div>
     </div>
 
+    <h3>Family members and accounts</h3>
+    ${accts.length ? `<div class="tablewrap"><table><thead><tr><th class="l">Account</th><th class="l">Belongs to</th><th>Gilts</th><th></th></tr></thead><tbody>
+      ${accts.map(a => `<tr><td class="l">${esc(accountLabel(a))}<div class="sub2">${esc(accountInfo(a).client || accountInfo(a).account)}</div></td>
+        <td class="l"><input type="text" list="people-list" data-name="${esc(a)}" value="${esc(personOf(a))}" style="width:190px" aria-label="Name for ${esc(accountLabel(a))}"></td>
+        <td>${HOLDINGS.filter(h=>h.holderKey===a).length}</td><td><button class="linkbtn" data-rmacct="${esc(a)}">Remove</button></td></tr>`).join("")}
+      </tbody></table></div><datalist id="people-list">${people(HOLDINGS).map(p=>`<option value="${esc(p)}">`).join("")}</datalist>
+      <p class="note">Give two accounts the same name (e.g. Yvonne's HL and Barclays accounts) and they're shown together as one family member.</p>` : `<p class="note">None yet.</p>`}
+
+    <h3>Save and load each person's data</h3>
+    <p class="note">Everything you load is kept only in this browser on this device. It isn't uploaded anywhere, and it doesn't go into the GitHub repo. Save a file for each person. Later, here or on another device, drop in one, some or all of those files at once. Each file adds to what's already loaded; nothing is replaced, and loading something twice doesn't duplicate it.</p>
+    <div class="controls">${people(HOLDINGS).map(p => `<button class="btn" data-save="${esc(p)}">Save ${esc(p)}</button>`).join("")}${HOLDINGS.length?`<button class="btn" data-save="*">Save everyone (one file)</button>`:""}</div>
+    ${people(HOLDINGS).length ? `<div class="controls">${people(HOLDINGS).map(p => `<button class="btn" data-unload="${esc(p)}">Remove ${esc(p)} from this browser</button>`).join("")}</div>` : ""}
+
     <h3>Loaded files (${files.length})</h3>
     ${files.length ? `<div class="tablewrap"><table><thead><tr><th class="l">Holder</th><th class="l">Gilt</th><th class="l">File</th><th>Rows</th><th class="l">Matched</th><th></th></tr></thead><tbody>
-      ${files.map(f => { const h = HOLDINGS.find(x=>x.hKey===f.hKey); return `<tr><td class="l">${esc(f.client)}<div class="sub2">${esc(f.account)} · ${esc(f.clientNo)}</div></td><td class="l">${esc(f.secLabel)}</td>
-        <td class="l">${f.kind==="income"?"Income history":"Security movements"}<div class="sub2">${esc(f.filename)}</div></td><td>${f.rows}</td>
+      ${files.map(f => { const h = HOLDINGS.find(x=>x.hKey===f.hKey); return `<tr><td class="l">${esc(personOf(f.holderKey))}<div class="sub2">${esc(accountLabel(f.holderKey))}</div></td><td class="l">${esc(h?h.secLabel:f.secLabel)}</td>
+        <td class="l">${f.kind==="income"?"Income history":f.kind==="both"?"Barclays account history":"Security movements"}<div class="sub2">${esc(f.filename)}</div></td><td>${f.rows}</td>
         <td class="l">${h&&h.gilt?`<span class="pill">${esc(h.gilt.isin)}</span>`:"<span class='bad'>no market data</span>"}</td>
         <td><button class="linkbtn" data-rm="${esc(f.id)}">Remove</button></td></tr>`; }).join("")}
       </tbody></table></div>` : `<p class="note">None yet.</p>`}
 
-    <h3>Backup</h3>
-    <p class="note">Everything you load is kept only in this browser on this device. It isn't uploaded anywhere, and it doesn't go into the GitHub repo. To move it to another device, or to keep a copy, save a backup and drop it here on the other device.</p>
-    <div class="controls"><button class="btn" id="b-export">Save backup</button><button class="btn" id="b-csv">Export overview as CSV</button><button class="btn" id="b-clear">Clear all my data</button></div>`;
+    <h3>Other</h3>
+    <div class="controls"><button class="btn" id="b-csv">Export overview as CSV</button><button class="btn" id="b-clear">Clear all my data</button></div>`;
   bindDrop($("#drop"), $("#pick"));
   el.querySelectorAll("[data-rm]").forEach(b => b.onclick = () => { removeFile(b.dataset.rm); persist(); renderAll(); });
   $("#s-basis").onclick = e => { const b = e.target.closest("button[data-b]"); if(!b) return; S.settings.basis = b.dataset.b; persist(); renderAll(); };
-  $("#b-export").onclick = () => download(`gilt-holdings-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ app:"gilt-holdings", version:1, savedAt:new Date().toISOString(), state:S }), "application/json");
+  el.querySelectorAll("[data-save]").forEach(b => b.onclick = () => savePerson(b.dataset.save));
+  el.querySelectorAll("[data-unload]").forEach(b => b.onclick = () => { const p = b.dataset.unload; if(confirm(`Remove all of ${p}'s data from this browser? Save ${p}'s file first if you'll want it back.`)){ unloadPerson(p); persist(); renderAll(); } });
+  el.querySelectorAll("[data-rmacct]").forEach(b => b.onclick = () => { const a = b.dataset.rmacct; if(confirm(`Remove ${accountLabel(a)} (${personOf(a)}) from this browser?`)){ unloadAccounts([a]); persist(); renderAll(); } });
+  el.querySelectorAll("input[data-name]").forEach(inp => inp.onchange = () => { S.names[inp.dataset.name] = inp.value.trim(); persist(); renderAll(); });
   $("#b-csv").onclick = exportCSV;
-  $("#b-clear").onclick = () => { if(confirm("Remove every loaded file, price override and setting from this browser? Save a backup first if you might want them back.")){ S = { files:[], tx:{}, overrides:{}, uploads:{strips:{},sonia:null}, settings:{...DEFAULT_SETTINGS} }; persist(); location.reload(); } };
+  $("#b-clear").onclick = () => { if(confirm("Remove every loaded file, price override and setting from this browser? Save a backup first if you might want them back.")){ S = freshState(); persist(); location.reload(); } };
   if(lastLog.length) $("#log").innerHTML = lastLog.map(([c,t]) => `<div class="${c}">${c==="ok"?"✓":"✗"} ${esc(t)}</div>`).join("");
 }
 let lastLog = [];
 function bindDrop(zone, pickBtn){
   if(!zone) return;
-  const input = document.createElement("input"); input.type = "file"; input.multiple = true; input.accept = ".csv,.json,.txt"; input.hidden = true; zone.appendChild(input);
+  const input = document.createElement("input"); input.type = "file"; input.multiple = true; input.accept = ".csv,.json,.txt,.xlsx,.xls"; input.hidden = true; zone.appendChild(input);
   pickBtn.onclick = e => { e.preventDefault(); input.click(); };
   input.onchange = async () => { lastLog = await handleFiles([...input.files]); input.value = ""; if(currentTab()!=="data" && lastLog.some(l=>l[0]==="bad")) setTab("data"); else renderAll(); };
   zone.addEventListener("dragover", e => { e.preventDefault(); zone.classList.add("over"); });
   zone.addEventListener("dragleave", () => zone.classList.remove("over"));
   zone.addEventListener("drop", async e => { e.preventDefault(); zone.classList.remove("over"); lastLog = await handleFiles([...e.dataTransfer.files]); renderAll(); });
 }
-function restoreBackup(o){
-  const st = o.state || {};
-  S.files = st.files || []; S.tx = st.tx || {}; S.overrides = st.overrides || {}; S.uploads = { strips:{}, sonia:null, ...(st.uploads||{}) }; S.settings = { ...DEFAULT_SETTINGS, ...(st.settings||{}) };
-  for(const [isin, s] of Object.entries(S.uploads.strips)) addStrip(isin, s.name, s.mat, s.series, "uploaded");
-  if(!M.sonia && S.uploads.sonia) ingestSonia(S.uploads.sonia, "uploaded");
+/* A saved file holds one or more people's accounts. Loading adds to what's here (never replaces). */
+function accountsOf(person){ return [...new Set(S.files.map(f=>f.holderKey))].filter(k => person==="*" || personOf(k)===person); }
+function savePerson(person){
+  const keys = new Set(accountsOf(person));
+  const files = S.files.filter(f => keys.has(f.holderKey));
+  const tx = {}; for(const [k,t] of Object.entries(S.tx)) if(keys.has(t.holderKey)) tx[k] = t;
+  const names = {}; keys.forEach(k => names[k] = personOf(k));
+  const isins = new Set(HOLDINGS.filter(h => keys.has(h.holderKey)).map(secId));
+  const overrides = {}; for(const [k,v] of Object.entries(S.overrides)) if(isins.has(k)) overrides[k] = v;
+  const state = { files, tx, names, overrides, ...(person==="*" ? { uploads:S.uploads, settings:S.settings } : {}) };
+  const slug = (person==="*" ? "everyone" : person).toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"");
+  download(`gilt-holdings-${slug}-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify({ app:"gilt-holdings", version:2, savedAt:new Date().toISOString(), people: person==="*" ? people(HOLDINGS) : [person], state }), "application/json");
 }
+function mergeBackup(o){
+  const st = o.state || {}, wasEmpty = !S.files.length;
+  const haveFile = new Set(S.files.map(f => f.id+"|"+f.hKey));
+  for(const f of st.files||[]) if(!haveFile.has(f.id+"|"+f.hKey)) S.files.push(f);
+  let added = 0, dup = 0;
+  for(const [k,t] of Object.entries(st.tx||{})){
+    if(S.tx[k]){ dup++; t.srcs.forEach(s => { if(!S.tx[k].srcs.includes(s)) S.tx[k].srcs.push(s); }); }
+    else { S.tx[k] = t; added++; }
+  }
+  for(const [k,v] of Object.entries(st.names||{})) if(v && !S.names[k]) S.names[k] = v;
+  for(const [k,v] of Object.entries(st.overrides||{})) if(!S.overrides[k]) S.overrides[k] = v;
+  if(st.uploads){ Object.assign(S.uploads.strips, st.uploads.strips||{}); if(!S.uploads.sonia && st.uploads.sonia) S.uploads.sonia = st.uploads.sonia; }
+  if(wasEmpty && st.settings) S.settings = { ...DEFAULT_SETTINGS, ...st.settings };
+  for(const [isin, s] of Object.entries(S.uploads.strips)) if(!M.strips.has(isin)) addStrip(isin, s.name, s.mat, s.series, "uploaded");
+  if(!M.sonia && S.uploads.sonia) ingestSonia(S.uploads.sonia, "uploaded");
+  const ppl = o.people || [...new Set((st.files||[]).map(f => (st.names||{})[f.holderKey] || personOf(f.holderKey)))];
+  return { added, dup, people:ppl };
+}
+function unloadAccounts(keys){
+  const ks = new Set(keys);
+  S.files = S.files.filter(f => !ks.has(f.holderKey));
+  for(const [k,t] of Object.entries(S.tx)) if(ks.has(t.holderKey)) delete S.tx[k];
+  keys.forEach(k => delete S.names[k]);
+}
+function unloadPerson(p){ unloadAccounts(accountsOf(p)); }
 function download(name, text, type){ const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([text],{type})); a.download = name; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href), 2000); }
 function exportCSV(){
   const vDn = valDn(HOLDINGS), q = s => `"${String(s).replace(/"/g,'""')}"`;
-  const head = ["Holder","Account","Gilt","ISIN","Valuation date","Nominal held","Net invested","Income","Value","Your gain","Your IRR"];
+  const head = ["Family member","Account","Gilt","ISIN","Valuation date","Nominal held","Net invested","Income","Value","Your gain","Your IRR"];
   COMPARATORS.forEach(c => head.push(`${c.long()} value`, `${c.long()} gain`, `${c.long()} IRR`, `You vs ${c.short} (£)`));
   const lines = [head.map(q).join(",")];
   for(const h of HOLDINGS){
-    const a = analyse(h, vDn); const r = [h.client, h.account, h.secLabel, h.gilt?h.gilt.isin:"", dnToIso(vDn), a.qty, a.netInvested.toFixed(2), a.income.toFixed(2), a.value==null?"":a.value.toFixed(2), a.gain==null?"":a.gain.toFixed(2), a.irr==null?"":(a.irr*100).toFixed(3)+"%"];
+    const a = analyse(h, vDn); const r = [personOf(h.holderKey), accountLabel(h.holderKey), h.secLabel, h.gilt?h.gilt.isin:"", dnToIso(vDn), a.qty, a.netInvested.toFixed(2), a.income.toFixed(2), a.value==null?"":a.value.toFixed(2), a.gain==null?"":a.gain.toFixed(2), a.irr==null?"":(a.irr*100).toFixed(3)+"%"];
     COMPARATORS.forEach(c => { const x = a.comps[c.id]; if(!x||x.missing) r.push("","","",""); else r.push(x.value.toFixed(2), x.gain.toFixed(2), (x.irr*100).toFixed(3)+"%", x.diff==null?"":x.diff.toFixed(2)); });
     lines.push(r.map(q).join(","));
   }
