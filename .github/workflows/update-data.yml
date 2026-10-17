@@ -22,6 +22,9 @@
 #     all`, which also re-fetches DMO + the BoE monthly archive zips --
 #     this catches any data revisions BoE makes and keeps everything in
 #     sync.
+#   - Also runs within a minute or two whenever a file is added to
+#     tradeweb_raw/ on main (e.g. uploaded from your phone), with
+#     `--only tradeweb`, so new Tradeweb prices show up straight away.
 #   - Can also be triggered manually from the Actions tab any time, with
 #     an optional "only" input if you want to run just one piece
 #     (e.g. "dmo" after adding new dmo_raw/ files, or "boe-archive").
@@ -46,6 +49,15 @@ on:
   schedule:
     - cron: '0 13 * * *'    # every day at 13:00 UTC (2pm BST / 1pm GMT) -- fast, latest BoE data only
     - cron: '0 14 3 * *'    # 3rd of each month, 14:00 UTC -- full run (archive refresh + revisions)
+  push:
+    # A new Tradeweb export uploaded to tradeweb_raw/ (from the GitHub website,
+    # an iPhone Shortcut or GitHub Desktop) is processed straight away rather
+    # than waiting for the next daily run. The workflow's own commits don't
+    # trigger this (GitHub never starts workflows from GITHUB_TOKEN pushes),
+    # so it can't loop.
+    branches: [main]
+    paths:
+      - 'tradeweb_raw/**'
   workflow_dispatch:
     inputs:
       only:
@@ -59,6 +71,12 @@ on:
 
 permissions:
   contents: write   # needed so the workflow can push the updated file
+
+# Never run two updates at once (e.g. an upload landing during the daily run):
+# the second waits for the first to finish instead of racing it to push.
+concurrency:
+  group: update-data
+  cancel-in-progress: false
 
 jobs:
   update-data:
@@ -82,6 +100,8 @@ jobs:
             if [ -n "${{ github.event.inputs.purge_dates }}" ]; then
               ARGS="$ARGS --purge-dates ${{ github.event.inputs.purge_dates }}"
             fi
+          elif [ "${{ github.event_name }}" = "push" ]; then
+            ARGS="--only tradeweb"   # a new export was uploaded -- just parse it
           elif [ "${{ github.event.schedule }}" = "0 14 3 * *" ]; then
             ARGS="--only all"
           else
