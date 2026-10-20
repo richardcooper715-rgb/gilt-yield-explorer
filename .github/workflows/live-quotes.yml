@@ -1,0 +1,57 @@
+# Intraday benchmark gilt yields for gilt-live.html.
+#
+# Every 15 minutes on weekdays from 07:00 to 16:45 UTC (8am-5:45pm UK in
+# winter, 7am-4:45pm in summer -- GitHub's cron has no time zones) this runs
+# fetch_live.py and publishes live_gilts.json to the `live-data` branch.
+#
+# The `live-data` branch only ever holds one commit (it's force-pushed each
+# time), so these frequent updates don't fill main's history or trigger a
+# GitHub Pages rebuild. gilt-live.html reads the file straight from
+# https://raw.githubusercontent.com/<owner>/<repo>/live-data/live_gilts.json
+#
+# GitHub sometimes starts scheduled runs late or skips them when it's busy;
+# the page always shows when the data was fetched. You can also run it by hand
+# from the Actions tab ("Live gilt quotes" -> Run workflow).
+
+name: Live gilt quotes
+
+on:
+  schedule:
+    - cron: '*/15 7-16 * * 1-5'
+  workflow_dispatch:
+
+permissions:
+  contents: write   # to push the live-data branch
+
+concurrency:
+  group: live-quotes
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Fetch quotes
+        run: |
+          pip install --quiet requests
+          python fetch_live.py "$RUNNER_TEMP/live_gilts.json"
+
+      - name: Publish to the live-data branch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout --quiet --orphan live-data-new
+          git rm -rf --quiet .
+          cp "$RUNNER_TEMP/live_gilts.json" live_gilts.json
+          git add live_gilts.json
+          git commit --quiet -m "Live gilt quotes $(date -u +%Y-%m-%dT%H:%MZ)"
+          git push --quiet --force origin HEAD:live-data

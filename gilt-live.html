@@ -1,0 +1,354 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Live Gilt Yields</title>
+<style>
+  :root{
+    --paper:#F7F5EF; --paper-panel:#FBFAF6; --ink:#232A2E; --ink-soft:#5B6469; --ink-muted:#7d8589;
+    --line:#D8D2C2; --grid:#E6E1D4; --hover:#EFEAD9; --accent:#2A5C8A; --surface:#FCFBF8;
+    --s1:#2a78d6; --s2:#eb6834; --good:#1f7a1f; --bad:#b23a3a; --close:#9a9a92;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --paper:#171716; --paper-panel:#1f1f1d; --ink:#ECEAE4; --ink-soft:#B9B6AC; --ink-muted:#8f8c84;
+      --line:#3a3935; --grid:#2c2b28; --hover:#2a2925; --accent:#7fb0e0; --surface:#1a1a19;
+      --s1:#3987e5; --s2:#d95926; --good:#5cbf5c; --bad:#e67272; --close:#77776f;
+    }
+  }
+  :root[data-theme="dark"]{
+    --paper:#171716; --paper-panel:#1f1f1d; --ink:#ECEAE4; --ink-soft:#B9B6AC; --ink-muted:#8f8c84;
+    --line:#3a3935; --grid:#2c2b28; --hover:#2a2925; --accent:#7fb0e0; --surface:#1a1a19;
+    --s1:#3987e5; --s2:#d95926; --good:#5cbf5c; --bad:#e67272; --close:#77776f;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;}
+  body{ background:var(--paper); color:var(--ink); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,Arial,sans-serif; font-size:14px; line-height:1.45; }
+  header{ padding:20px 24px 14px; border-bottom:1px solid var(--line); }
+  header h1{ font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif; font-weight:600; font-size:22px; margin:0 0 4px; }
+  header p{ margin:0; color:var(--ink-soft); font-size:13px; max-width:760px; }
+  nav.apps{ margin-top:8px; font-size:13px; display:flex; flex-wrap:wrap; gap:4px 14px; }
+  nav.apps a{ color:var(--accent); }
+  main{ padding:16px 24px 40px; max-width:1240px; }
+  @media (max-width:600px){ header{padding:16px 16px 12px;} main{padding:12px 16px 32px;} }
+  h3{ font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); margin:22px 0 8px; font-weight:600; }
+  .controls{ display:flex; flex-wrap:wrap; gap:10px 18px; align-items:flex-end; margin-bottom:12px; }
+  .ctl{ display:flex; flex-direction:column; gap:4px; }
+  .ctl > .lbl{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); font-weight:600; }
+  .seg{ display:inline-flex; border:1px solid var(--line); border-radius:5px; overflow:hidden; background:var(--paper-panel); }
+  .seg button{ font:inherit; font-size:13px; border:none; background:none; color:var(--ink-soft); padding:6px 11px; cursor:pointer; border-right:1px solid var(--line); }
+  .seg button:last-child{ border-right:none; }
+  .seg button[aria-pressed="true"]{ background:var(--accent); color:#fff; }
+  .btn{ font:inherit; font-size:13px; padding:6px 12px; border:1px solid var(--accent); border-radius:4px; background:var(--accent); color:#fff; cursor:pointer; }
+  .btn[disabled]{ opacity:.6; cursor:wait; }
+  label.chk{ font-size:13px; color:var(--ink-soft); display:flex; gap:6px; align-items:center; }
+  .status{ font-size:12.5px; color:var(--ink-soft); }
+  .status .bad{ color:var(--bad); }
+  .tiles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:10px; margin:4px 0 6px; }
+  .tile{ background:var(--paper-panel); border:1px solid var(--line); border-radius:6px; padding:10px 12px; }
+  .tile .k{ font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); font-weight:600; }
+  .tile .v{ font-size:22px; font-family:Georgia,serif; margin-top:2px; font-variant-numeric:tabular-nums; }
+  .tile .s{ font-size:12px; color:var(--ink-soft); margin-top:2px; font-variant-numeric:tabular-nums; }
+  .up{ color:var(--bad); } .down{ color:var(--good); }
+  .chartcard{ background:var(--surface); border:1px solid var(--line); border-radius:6px; padding:10px 12px 6px; margin-top:8px; position:relative; }
+  .chartcard .title{ font-weight:600; }
+  .legend{ display:flex; flex-wrap:wrap; gap:6px 16px; font-size:12px; color:var(--ink-soft); align-items:center; margin:4px 0; }
+  .legend svg{ vertical-align:middle; margin-right:5px; }
+  svg.chart{ width:100%; height:auto; display:block; touch-action:pan-y; }
+  svg.chart text{ fill:var(--ink-soft); font-size:11px; font-family:inherit; }
+  .tip{ position:absolute; pointer-events:none; background:var(--paper-panel); border:1px solid var(--line); border-radius:5px; padding:7px 9px; font-size:12px; box-shadow:0 2px 8px rgba(0,0,0,.12); display:none; z-index:5; min-width:160px; }
+  .tip .row{ display:flex; justify-content:space-between; gap:14px; }
+  .tablewrap{ overflow-x:auto; border:1px solid var(--line); border-radius:6px; background:var(--paper-panel); }
+  table{ border-collapse:collapse; width:100%; font-variant-numeric:tabular-nums; }
+  th, td{ padding:7px 10px; text-align:right; white-space:nowrap; border-bottom:1px solid var(--grid); }
+  th{ font-size:11px; text-transform:uppercase; letter-spacing:.05em; color:var(--ink-soft); font-weight:600; background:var(--paper); }
+  th:first-child, td:first-child, .l{ text-align:left; }
+  .muted{ color:var(--ink-muted); }
+  .sub2{ font-size:11.5px; color:var(--ink-soft); }
+  details{ background:var(--paper-panel); border:1px solid var(--line); border-radius:6px; padding:8px 12px; margin-top:16px; }
+  details summary{ cursor:pointer; font-weight:600; }
+  details p, details li{ font-size:13px; color:var(--ink-soft); }
+</style>
+</head>
+<body>
+<header>
+  <h1>Live Gilt Yields</h1>
+  <p>Intraday yields on the benchmark gilts quoted by CNBC and MarketWatch, with the yield curve drawn through them and compared with the previous close.</p>
+  <nav class="apps"><a href="gilt-yield-explorer.html">Gilt Yield Explorer</a><a href="gilt-holdings.html">Gilt Holdings</a><a href="savings-planner.html">Savings Planner</a></nav>
+</header>
+<main>
+  <div class="controls">
+    <div class="ctl"><button class="btn" id="refresh">Refresh now</button></div>
+    <div class="ctl"><span class="lbl">Auto-refresh</span><div class="seg" id="auto">
+      <button data-v="0">Off</button><button data-v="60">Every minute</button><button data-v="300">Every 5 min</button></div></div>
+    <div class="ctl"><span class="lbl">Maturity axis</span><div class="seg" id="axis">
+      <button data-v="lin">Linear</button><button data-v="log">Log</button></div></div>
+    <div class="ctl" style="gap:2px">
+      <label class="chk"><input type="checkbox" id="showPrev"> Previous close</label>
+      <label class="chk"><input type="checkbox" id="showAll"> All gilts at last daily close</label>
+    </div>
+  </div>
+  <div class="status" id="status">Loading…</div>
+  <div class="tiles" id="tiles"></div>
+
+  <div class="chartcard">
+    <div class="title">Gilt yield curve</div>
+    <div class="legend" id="legend"></div>
+    <svg class="chart" id="chart" viewBox="0 0 900 400" role="img" aria-label="Gilt yield curve"></svg><div class="tip"></div>
+  </div>
+
+  <h3>Benchmarks</h3>
+  <div class="tablewrap"><table id="tbl"></table></div>
+
+  <details><summary>Where these numbers come from</summary>
+    <ul>
+      <li><b>CNBC</b> quotes six benchmark gilts (2, 5, 10, 30, 40 and 50 years) and says which gilt each one is. This page asks CNBC directly each time you refresh, so these points are as live as CNBC's own page. Each is plotted at its actual time to maturity.</li>
+      <li><b>MarketWatch</b> (Tullett Prebon prices) covers 17 maturities from 1 to 50 years. Its quotes can't be read straight from a web page, so a GitHub job (<code>live-quotes.yml</code>) collects them every 15 minutes on weekdays during UK market hours. MarketWatch's own labels for the underlying gilts are out of date. So the job identifies each one as the gilt whose price/yield maths reproduces MarketWatch's price and yield together, and plots it at that gilt's real maturity. If one can't be identified, it's plotted at its nominal maturity (e.g. 10 years). GitHub sometimes runs these jobs late, and the status line shows when they were last collected.</li>
+      <li><b>The curve</b> runs smoothly through the MarketWatch points (monotone cubic interpolation, so it never overshoots between them). If MarketWatch isn't available it runs through CNBC's points. These are gross redemption yields on coupon-paying gilts, not the Bank of England's zero-coupon curve shown in the Gilt Yield Explorer.</li>
+      <li><b>All gilts at last daily close</b> are the yields in your daily <code>gilt_latest.json</code> update for every conventional gilt.</li>
+      <li>Both quote feeds are unofficial and free, so either could change or stop without notice. If one fails, the page shows the other.</li>
+    </ul>
+  </details>
+</main>
+
+<script>
+"use strict";
+const KEY = "gilt-live-v1";
+const DAY = 864e5;
+let prefs = { auto:60, axis:"lin", showPrev:true, showAll:true };
+try{ prefs = { ...prefs, ...JSON.parse(localStorage.getItem(KEY)||"{}") }; }catch(e){}
+const savePrefs = () => { try{ localStorage.setItem(KEY, JSON.stringify(prefs)); }catch(e){} };
+const $ = s => document.querySelector(s);
+const esc = s => String(s??"").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+/* where the scheduled job publishes MarketWatch data */
+const REPO = (() => {
+  const m = /^([^.]+)\.github\.io$/.exec(location.hostname), seg = location.pathname.split("/").filter(Boolean)[0];
+  return m && seg ? `${m[1]}/${seg}` : "richardcooper715-rgb/gilt-yield-explorer";
+})();
+const LIVE_URL = `https://raw.githubusercontent.com/${REPO}/live-data/live_gilts.json`;
+const CNBC_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=UK1Y|UK2Y|UK3Y|UK5Y|UK7Y|UK10Y|UK15Y|UK20Y|UK30Y|UK40Y|UK50Y&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json";
+
+const D = { mw:null, mwFetched:null, cnbc:null, cnbcLive:false, cnbcErr:null, mwErr:null, close:null, closeDate:null };
+const pct = s => { const v = parseFloat(String(s??"").replace(/[%+]/g,"")); return isFinite(v) ? v : null; };
+const mwX = r => r.maturity_date ? yearsTo(r.maturity_date) : r.years;   // actual maturity once the job has identified the gilt
+const yearsTo = iso => (Date.parse(iso+"T00:00:00Z") - Date.now())/DAY/365.25;
+const ukTime = iso => { try{ return new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Europe/London"}); }catch(e){ return ""; } };
+const ago = iso => { const m = Math.round((Date.now()-Date.parse(iso))/6e4); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m/60)} h ago` : `${Math.round(m/1440)} days ago`; };
+const fmtMat = iso => { const d = new Date(iso+"T00:00:00Z"); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
+const bp = v => v==null ? "–" : `${v>0?"+":v<0?"−":""}${Math.abs(v*100).toFixed(1)} bp`;
+const chgCls = v => v==null||Math.abs(v)<0.0005 ? "" : v>0 ? "up" : "down";   // yields up = prices down
+
+function cnbcRows(list){
+  return list.filter(q => String(q.code)==="0" && q.last!=null).map(q => ({
+    symbol:q.symbol, name:q.name, yield:pct(q.last ?? q.yield), change:pct(q.change), prev_close:pct(q.previous_day_closing ?? q.prev_close),
+    high:pct(q.high), low:pct(q.low), price:pct(q.bond_last_price ?? q.price), coupon:pct(q.coupon), maturity_date:q.maturity_date, time:q.last_time ?? q.time
+  }));
+}
+async function loadCNBC(){
+  try{
+    const r = await fetch(CNBC_URL, {cache:"no-store"}); if(!r.ok) throw new Error("HTTP "+r.status);
+    const j = await r.json(); const rows = cnbcRows(j.FormattedQuoteResult.FormattedQuote);
+    if(!rows.length) throw new Error("no quotes returned");
+    D.cnbc = rows; D.cnbcLive = true; D.cnbcErr = null;
+  }catch(e){ D.cnbcErr = e.message; D.cnbcLive = false; }
+}
+async function loadMW(){
+  try{
+    const r = await fetch(LIVE_URL+"?t="+Math.floor(Date.now()/60000), {cache:"no-store"}); if(!r.ok) throw new Error(r.status===404 ? "not published yet" : "HTTP "+r.status);
+    const j = await r.json();
+    const mw = j.sources && j.sources.marketwatch;
+    D.mw = mw && mw.rows && mw.rows.length ? mw.rows : null; D.mwFetched = j.fetched; D.mwErr = D.mw ? null : (mw && mw.error) || "no data";
+    // CNBC copy collected by the job: only used if the live request fails
+    const c = j.sources && j.sources.cnbc;
+    if(!D.cnbcLive && c && c.rows && c.rows.length){ D.cnbc = c.rows.map(x => ({...x, code:0})); D.cnbcFromJob = j.fetched; }
+  }catch(e){ D.mwErr = e.message; }
+}
+async function loadClose(){
+  if(D.close) return;
+  try{
+    const r = await fetch("./gilt_latest.json", {cache:"no-cache"}); if(!r.ok) return;
+    const j = await r.json(); const today = new Date().toISOString().slice(0,10);
+    D.close = (j.securities||[]).filter(s => s.type==="conventional" && s.coupon_pct!=null && s.yield!=null && s.redemption_date > today && !/strip/i.test(s.name||""))
+      .map(s => ({ name:s.name, isin:s.isin, years:yearsTo(s.redemption_date), yield:s.yield, date:s.date, mat:s.redemption_date }));
+    D.closeDate = D.close.map(s=>s.date).sort().pop();
+  }catch(e){}
+}
+
+async function refresh(){
+  const b = $("#refresh"); b.disabled = true; b.textContent = "Refreshing…";
+  await Promise.all([loadCNBC(), loadMW(), loadClose()]);
+  b.disabled = false; b.textContent = "Refresh now";
+  render();
+}
+
+/* ---------- maths ---------- */
+/* Fritsch-Carlson monotone cubic through sorted points */
+function monotone(pts){
+  const n = pts.length; if(n < 2) return x => pts.length ? pts[0][1] : null;
+  const xs = pts.map(p=>p[0]), ys = pts.map(p=>p[1]), d = [], m = new Array(n);
+  for(let i=0;i<n-1;i++) d.push((ys[i+1]-ys[i])/(xs[i+1]-xs[i]));
+  m[0] = d[0]; m[n-1] = d[n-2];
+  for(let i=1;i<n-1;i++) m[i] = d[i-1]*d[i] <= 0 ? 0 : (d[i-1]+d[i])/2;
+  for(let i=0;i<n-1;i++){
+    if(d[i]===0){ m[i]=0; m[i+1]=0; continue; }
+    const a = m[i]/d[i], b = m[i+1]/d[i], h = a*a+b*b;
+    if(h > 9){ const t = 3/Math.sqrt(h); m[i] = t*a*d[i]; m[i+1] = t*b*d[i]; }
+  }
+  return x => {
+    if(x <= xs[0]) return ys[0]; if(x >= xs[n-1]) return ys[n-1];
+    let i = 0; while(xs[i+1] < x) i++;
+    const h = xs[i+1]-xs[i], t = (x-xs[i])/h, t2 = t*t, t3 = t2*t;
+    return (2*t3-3*t2+1)*ys[i] + (t3-2*t2+t)*h*m[i] + (-2*t3+3*t2)*ys[i+1] + (t3-t2)*h*m[i+1];
+  };
+}
+function curvePoints(){
+  if(D.mw) return { src:"MarketWatch", pts: D.mw.map(r => [mwX(r), r.yield]).sort((a,b)=>a[0]-b[0]),
+                    prev: D.mw.filter(r=>r.prev_close!=null).map(r => [mwX(r), r.prev_close]).sort((a,b)=>a[0]-b[0]) };
+  if(D.cnbc) return { src:"CNBC", pts: D.cnbc.map(r => [yearsTo(r.maturity_date), r.yield]).sort((a,b)=>a[0]-b[0]),
+                      prev: D.cnbc.filter(r=>r.prev_close!=null).map(r => [yearsTo(r.maturity_date), r.prev_close]).sort((a,b)=>a[0]-b[0]) };
+  return null;
+}
+
+/* ---------- render ---------- */
+function render(){
+  renderStatus(); renderTiles(); renderChart(); renderTable();
+}
+function renderStatus(){
+  const parts = [];
+  if(D.cnbc) parts.push(D.cnbcLive ? `CNBC: live, last trade ${ukTime(D.cnbc[0].time)} UK` : `CNBC: <span class="bad">live request failed (${esc(D.cnbcErr)})</span>, showing the copy collected ${ago(D.cnbcFromJob)}`);
+  else parts.push(`CNBC: <span class="bad">unavailable (${esc(D.cnbcErr||"no data")})</span>`);
+  if(D.mw) parts.push(`MarketWatch: collected ${ukTime(D.mwFetched)} UK (${ago(D.mwFetched)})`);
+  else parts.push(`MarketWatch: <span class="bad">${esc(D.mwErr||"unavailable")}</span>`);
+  parts.push(`page refreshed ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:"Europe/London"})}`);
+  $("#status").innerHTML = parts.join(" · ");
+}
+function bench(tenorYears){
+  // best available quote for a tenor: CNBC (live) first, else MarketWatch
+  const c = (D.cnbc||[]).find(r => r.symbol===`UK${tenorYears}Y`);
+  if(c) return { y:c.yield, chg:c.change, src:"CNBC" };
+  const m = (D.mw||[]).find(r => r.years===tenorYears);
+  return m ? { y:m.yield, chg:m.change, src:"MarketWatch" } : null;
+}
+function renderTiles(){
+  const t = [];
+  for(const n of [2,5,10,30,50]){
+    const b = bench(n); if(!b) continue;
+    t.push(`<div class="tile"><div class="k">${n}-year</div><div class="v">${b.y.toFixed(3)}%</div><div class="s ${chgCls(b.chg)}">${bp(b.chg)} today</div></div>`);
+  }
+  const b2 = bench(2), b10 = bench(10), b30 = bench(30);
+  if(b2 && b10) t.push(`<div class="tile"><div class="k">10y − 2y spread</div><div class="v">${((b10.y-b2.y)*100).toFixed(0)} bp</div><div class="s">${b10.chg!=null&&b2.chg!=null?bp(b10.chg-b2.chg)+" today":""}</div></div>`);
+  if(b10 && b30) t.push(`<div class="tile"><div class="k">30y − 10y spread</div><div class="v">${((b30.y-b10.y)*100).toFixed(0)} bp</div><div class="s">${b30.chg!=null&&b10.chg!=null?bp(b30.chg-b10.chg)+" today":""}</div></div>`);
+  $("#tiles").innerHTML = t.join("");
+}
+
+const NS = "http://www.w3.org/2000/svg";
+const el = (tag, a, p) => { const e = document.createElementNS(NS, tag); for(const k in a) e.setAttribute(k, a[k]); if(p) p.appendChild(e); return e; };
+function renderChart(){
+  const svg = $("#chart"), card = svg.parentElement, tip = card.querySelector(".tip");
+  const W = Math.round(Math.min(900, Math.max(340, card.clientWidth - 24))), H = Math.round(W < 600 ? 330 : 400);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`); svg.innerHTML = "";
+  const C = curvePoints();
+  const close = prefs.showAll && D.close ? D.close : [];
+  const cn = (D.cnbc||[]).map(r => ({...r, x:yearsTo(r.maturity_date)})).filter(r => r.x > 0);
+  if(!C && !close.length){ el("text",{x:W/2,y:H/2,"text-anchor":"middle"},svg).textContent = "No data yet"; $("#legend").innerHTML=""; return; }
+  const log = prefs.axis==="log";
+  const xsAll = [...(C?C.pts.map(p=>p[0]):[]), ...cn.map(r=>r.x), ...close.map(c=>c.years)].filter(x=>x>0);
+  const x0 = log ? Math.max(0.25, Math.min(...xsAll)*0.85) : 0, x1 = Math.max(...xsAll)*1.03;
+  const ysAll = [...(C?C.pts.map(p=>p[1]):[]), ...(C&&prefs.showPrev?C.prev.map(p=>p[1]):[]), ...cn.map(r=>r.yield), ...close.map(c=>c.yield)];
+  let y0 = Math.min(...ysAll), y1 = Math.max(...ysAll); const pad = (y1-y0)*0.08 || 0.1; y0 -= pad; y1 += pad;
+  const m = { l: W<600?44:54, r:14, t:14, b:34 };
+  const fx = x => log ? Math.log(x) : x;
+  const X = x => m.l + (fx(Math.max(x, log?x0:0)) - fx(x0))/(fx(x1)-fx(x0))*(W-m.l-m.r);
+  const Y = y => m.t + (1-(y-y0)/(y1-y0))*(H-m.t-m.b);
+  // grid
+  const step = [0.05,0.1,0.2,0.25,0.5,1].find(s => (y1-y0)/s <= 7) || 1;
+  for(let v = Math.ceil(y0/step)*step; v <= y1; v += step){ el("line",{x1:m.l,x2:W-m.r,y1:Y(v),y2:Y(v),stroke:"var(--grid)"},svg); el("text",{x:m.l-6,y:Y(v)+4,"text-anchor":"end"},svg).textContent = v.toFixed(step<0.1?2:step<1?1:0)+"%"; }
+  const xt = log ? [0.5,1,2,3,5,7,10,15,20,30,40,50].filter(v => v>=x0 && v<=x1) : [0,5,10,15,20,25,30,35,40,45,50].filter(v => v<=x1);
+  for(const v of xt){ el("line",{x1:X(v),x2:X(v),y1:H-m.b,y2:H-m.b+4,stroke:"var(--line)"},svg); el("text",{x:X(v),y:H-m.b+16,"text-anchor":"middle"},svg).textContent = v+"y"; }
+  el("line",{x1:m.l,x2:W-m.r,y1:H-m.b,y2:H-m.b,stroke:"var(--line)"},svg);
+  el("text",{x:W-m.r,y:H-4,"text-anchor":"end"},svg).textContent = "Years to maturity";
+  // all-gilts close
+  for(const c of close) el("circle",{cx:X(c.years),cy:Y(c.yield),r:3,fill:"none",stroke:"var(--close)","stroke-width":1.2},svg);
+  const path = (f, a, b, attrs) => { let d = ""; const n = 160; for(let i=0;i<=n;i++){ const x = log ? Math.exp(Math.log(a)+(Math.log(b)-Math.log(a))*i/n) : a+(b-a)*i/n; d += (i?"L":"M")+X(x).toFixed(1)+","+Y(f(x)).toFixed(1); } el("path",{d,fill:"none",...attrs},svg); };
+  let fNow = null;
+  if(C && C.pts.length){
+    const a = C.pts[0][0], b = C.pts[C.pts.length-1][0];
+    if(prefs.showPrev && C.prev.length > 1) path(monotone(C.prev), C.prev[0][0], C.prev[C.prev.length-1][0], { stroke:"var(--close)","stroke-width":1.5,"stroke-dasharray":"5 4" });
+    fNow = monotone(C.pts);
+    path(fNow, a, b, { stroke: C.src==="MarketWatch" ? "var(--s1)" : "var(--s2)", "stroke-width":2, "stroke-linejoin":"round" });
+  }
+  // crosshair (reads the curve at any maturity)
+  const cross = el("line",{y1:m.t,y2:H-m.b,stroke:"var(--ink-muted)","stroke-dasharray":"3 3",visibility:"hidden"},svg);
+  const dot = el("circle",{r:4,fill:"var(--s1)",stroke:"var(--surface)","stroke-width":2,visibility:"hidden"},svg);
+  const show = (html, px, py) => { tip.innerHTML = html; tip.style.display = "block"; const box = svg.getBoundingClientRect(), cb = card.getBoundingClientRect(), sc = box.width/W;
+    let left = box.left-cb.left + px*sc + 12; if(left + tip.offsetWidth > cb.width-4) left = box.left-cb.left + px*sc - tip.offsetWidth - 12;
+    tip.style.left = Math.max(4,left)+"px"; tip.style.top = (box.top-cb.top + Math.max(0, py*sc-24))+"px"; };
+  const hide = () => { tip.style.display = "none"; cross.setAttribute("visibility","hidden"); dot.setAttribute("visibility","hidden"); };
+  const ov = el("rect",{x:m.l,y:m.t,width:W-m.l-m.r,height:H-m.t-m.b,fill:"transparent"},svg);
+  ov.addEventListener("pointermove", ev => {
+    if(!fNow) return;
+    const b = svg.getBoundingClientRect(), px = (ev.clientX-b.left)/b.width*W;
+    const u = (px-m.l)/(W-m.l-m.r), x = log ? Math.exp(fx(x0)+u*(fx(x1)-fx(x0))) : x0+u*(x1-x0);
+    const a = C.pts[0][0], z = C.pts[C.pts.length-1][0]; if(x < a || x > z){ hide(); return; }
+    const y = fNow(x), yp = prefs.showPrev && C.prev.length>1 ? monotone(C.prev)(x) : null;
+    cross.setAttribute("x1",X(x)); cross.setAttribute("x2",X(x)); cross.setAttribute("visibility","visible");
+    dot.setAttribute("cx",X(x)); dot.setAttribute("cy",Y(y)); dot.setAttribute("visibility","visible");
+    show(`<b>${x.toFixed(1)} years</b><div class="row"><span>Curve now</span><span>${y.toFixed(3)}%</span></div>${yp!=null?`<div class="row"><span>Previous close</span><span>${yp.toFixed(3)}%</span></div><div class="row"><span>Change</span><span>${bp(y-yp)}</span></div>`:""}`, X(x), Y(y));
+  });
+  ov.addEventListener("pointerleave", hide);
+  // markers with their own tooltips
+  const hit = (cx, cy, html) => { const h = el("circle",{cx,cy,r:10,fill:"transparent"},svg); h.addEventListener("pointerenter", () => { hide(); show(html, cx, cy); }); h.addEventListener("pointerleave", hide); };
+  if(D.mw) for(const r of D.mw){ const cx = X(mwX(r)), cy = Y(r.yield); el("circle",{cx,cy,r:4,fill:"var(--s1)",stroke:"var(--surface)","stroke-width":2},svg);
+    hit(cx, cy, `<b>MarketWatch ${r.years}-year</b>${r.maturity_date?`<div class="muted">${r.coupon}% Treasury ${fmtMat(r.maturity_date)}</div>`:""}<div class="row"><span>Yield</span><span>${r.yield.toFixed(3)}%</span></div><div class="row"><span>Today</span><span>${bp(r.change)}</span></div>${r.price!=null?`<div class="row"><span>Price</span><span>${r.price.toFixed(3)}</span></div>`:""}<div class="row"><span>Time</span><span>${esc((r.time_uk||"").slice(11,16))} UK</span></div>`); }
+  for(const r of cn){ const cx = X(r.x), cy = Y(r.yield);
+    el("path",{d:`M${cx},${cy-6}L${cx+6},${cy}L${cx},${cy+6}L${cx-6},${cy}Z`,fill:"var(--s2)",stroke:"var(--surface)","stroke-width":1.5},svg);
+    hit(cx, cy, `<b>CNBC ${esc(r.symbol.replace("UK",""))}</b><div class="muted">${r.coupon!=null?r.coupon+"% ":""}Treasury ${fmtMat(r.maturity_date)}</div><div class="row"><span>Yield</span><span>${r.yield.toFixed(3)}%</span></div><div class="row"><span>Today</span><span>${bp(r.change)}</span></div>${r.price!=null?`<div class="row"><span>Price</span><span>${r.price.toFixed(3)}</span></div>`:""}<div class="row"><span>Time</span><span>${ukTime(r.time)} UK</span></div>`); }
+  for(const c of close){ hit(X(c.years), Y(c.yield), `<b>${esc(c.name)}</b><div class="row"><span>Yield at close</span><span>${c.yield.toFixed(3)}%</span></div><div class="row"><span>Close of</span><span>${esc(c.date)}</span></div>`); }
+  // direct labels on a few CNBC points (selective, not every point)
+  for(const r of cn.filter(r => ["UK2Y","UK10Y","UK30Y"].includes(r.symbol))) el("text",{x:X(r.x),y:Y(r.yield)-10,"text-anchor":"middle"},svg).textContent = r.yield.toFixed(2)+"%";
+  // legend
+  const lg = [];
+  if(D.mw) lg.push(`<span><svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="var(--s1)" stroke-width="2"/><circle cx="11" cy="5" r="3.5" fill="var(--s1)"/></svg>MarketWatch now (curve)</span>`);
+  if(cn.length) lg.push(`<span><svg width="12" height="12"><path d="M6,0L12,6L6,12L0,6Z" fill="var(--s2)"/></svg>CNBC now${D.mw?"":" (curve)"}</span>`);
+  if(prefs.showPrev && C && C.prev.length>1) lg.push(`<span><svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="var(--close)" stroke-width="1.5" stroke-dasharray="5 4"/></svg>Previous close</span>`);
+  if(close.length) lg.push(`<span><svg width="10" height="10"><circle cx="5" cy="5" r="3.5" fill="none" stroke="var(--close)" stroke-width="1.2"/></svg>All gilts, close of ${esc(D.closeDate)}</span>`);
+  $("#legend").innerHTML = lg.join("");
+}
+function renderTable(){
+  const tenors = [...new Set([...(D.mw||[]).map(r=>r.years), ...(D.cnbc||[]).map(r=>+String(r.symbol).replace(/\D/g,""))])].sort((a,b)=>a-b);
+  const rows = tenors.map(n => {
+    const m = (D.mw||[]).find(r => r.years===n), c = (D.cnbc||[]).find(r => r.symbol===`UK${n}Y`);
+    return `<tr><td>${n}-year${m&&m.maturity_date?`<div class="sub2">MW: ${m.coupon}% ${fmtMat(m.maturity_date)}</div>`:""}</td>
+      <td>${m?m.yield.toFixed(3)+"%":"<span class='muted'>–</span>"}</td><td class="${m?chgCls(m.change):""}">${m?bp(m.change):""}</td><td>${m&&m.price!=null?m.price.toFixed(3):""}</td>
+      <td class="l">${c?`${c.coupon!=null?c.coupon+"% ":""}Treasury ${fmtMat(c.maturity_date)}`:""}</td>
+      <td>${c?c.yield.toFixed(3)+"%":"<span class='muted'>–</span>"}</td><td class="${c?chgCls(c.change):""}">${c?bp(c.change):""}</td><td>${c&&c.price!=null?c.price.toFixed(3):""}</td>
+      <td>${c&&c.low!=null&&c.high!=null?`${c.low.toFixed(2)}–${c.high.toFixed(2)}%`:m&&m.low!=null&&m.high!=null?`${m.low.toFixed(2)}–${m.high.toFixed(2)}%`:""}</td></tr>`;
+  }).join("");
+  $("#tbl").innerHTML = `<thead><tr><th>Maturity</th><th>MarketWatch</th><th>Today</th><th>Price</th><th class="l">CNBC benchmark gilt</th><th>CNBC</th><th>Today</th><th>Price</th><th>Day range</th></tr></thead><tbody>${rows || `<tr><td colspan="9" class="muted">No quotes loaded</td></tr>`}</tbody>`;
+}
+
+/* ---------- controls ---------- */
+let timer = null;
+function setAuto(v){
+  prefs.auto = v; savePrefs(); clearInterval(timer);
+  document.querySelectorAll("#auto button").forEach(b => b.setAttribute("aria-pressed", +b.dataset.v===v));
+  if(v) timer = setInterval(() => { if(!document.hidden) refresh(); }, v*1000);
+}
+$("#refresh").onclick = refresh;
+$("#auto").onclick = e => { const b = e.target.closest("button"); if(b) setAuto(+b.dataset.v); };
+$("#axis").onclick = e => { const b = e.target.closest("button"); if(!b) return; prefs.axis = b.dataset.v; savePrefs(); syncControls(); renderChart(); };
+$("#showPrev").onchange = e => { prefs.showPrev = e.target.checked; savePrefs(); renderChart(); };
+$("#showAll").onchange = e => { prefs.showAll = e.target.checked; savePrefs(); renderChart(); };
+function syncControls(){
+  document.querySelectorAll("#axis button").forEach(b => b.setAttribute("aria-pressed", b.dataset.v===prefs.axis));
+  $("#showPrev").checked = prefs.showPrev; $("#showAll").checked = prefs.showAll;
+}
+document.addEventListener("visibilitychange", () => { if(!document.hidden && prefs.auto) refresh(); });
+let rw = window.innerWidth; window.addEventListener("resize", () => { if(Math.abs(window.innerWidth-rw) > 40){ rw = window.innerWidth; renderChart(); } });
+syncControls(); setAuto(prefs.auto); refresh();
+</script>
+</body>
+</html>
