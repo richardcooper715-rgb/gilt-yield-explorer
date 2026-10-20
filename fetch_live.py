@@ -136,8 +136,12 @@ def identify_marketwatch(rows, latest_path="gilt_latest.json"):
     for r in rows:
         if r.get("price") is None or r.get("yield") is None:
             continue
-        scored = sorted((abs(clean_price_from_yield(s["coupon_pct"], mat, r["yield"], today) - r["price"]), s, mat)
-                        for s, mat in gilts)
+        # only gilts with roughly the right maturity (a benchmark is never far from its tenor)
+        lo, hi = (0.2, 2.5) if r["years"] <= 1 else (0.4 * r["years"], 1.8 * r["years"])
+        near = [(s, mat) for s, mat in gilts if lo <= (mat - today).days / 365.25 <= hi]
+        scored = sorted(((abs(clean_price_from_yield(s["coupon_pct"], mat, r["yield"], today) - r["price"]), s["isin"], s, mat)
+                         for s, mat in near), key=lambda t: t[0])
+        scored = [(e, s, mat) for e, _, s, mat in scored]
         if scored and scored[0][0] < 0.02 and (len(scored) == 1 or scored[1][0] > 0.03):
             _, s, mat = scored[0]
             r.update({"gilt": s["name"], "isin": s["isin"], "coupon": s["coupon_pct"], "maturity_date": mat.isoformat()})
