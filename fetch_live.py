@@ -21,7 +21,7 @@ without notice -- the script records whatever it could get and carries on):
      whose own price/yield maths turns MarketWatch's yield into MarketWatch's
      clean price. That pins it down to within 0.001 of price.
 
-  2. CNBC benchmark gilts (2, 5, 10, 30, 40, 50 years), with the actual
+  2. CNBC benchmark gilts (2, 5, 10, 15, 20, 30, 40, 50 years), with the actual
      benchmark gilt's coupon and maturity:
      the quote service behind https://www.cnbc.com/quotes/UK5Y
      The page also calls this directly from the browser (it allows that), so
@@ -50,7 +50,10 @@ MW_URL = ("https://api.wsj.net/api/dylan/quotes/v2/comp/quoteByDialect?dialect=o
           "&needed=CompositeTrading|BondSpecific&MaxInstrumentMatches=1&accept=application/json"
           "&EntitlementToken=cecc4267a0194af89ca343805a3e57af&ckey=cecc4267a0&dialects=Charting&id=")
 
-CNBC_SYMBOLS = ["UK1Y", "UK2Y", "UK3Y", "UK5Y", "UK7Y", "UK10Y", "UK15Y", "UK20Y", "UK30Y", "UK40Y", "UK50Y"]
+# CNBC's symbols aren't consistent: UK2Y...UK50Y, but GB15Y and GB20Y. Unknown symbols are just not returned,
+# so a few speculative GB tenors are included in case CNBC adds them.
+CNBC_SYMBOLS = ["UK2Y", "UK5Y", "UK10Y", "UK30Y", "UK40Y", "UK50Y", "GB15Y", "GB20Y",
+                "GB1Y", "GB3Y", "GB4Y", "GB6Y", "GB7Y", "GB8Y", "GB9Y", "GB12Y", "GB25Y"]
 CNBC_URL = ("https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols={}"
             "&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json")
 

@@ -103,7 +103,7 @@
 
   <details><summary>Where these numbers come from</summary>
     <ul>
-      <li><b>CNBC</b> quotes six benchmark gilts (2, 5, 10, 30, 40 and 50 years) and says which gilt each one is. This page asks CNBC directly each time you refresh, so these points are as live as CNBC's own page. Each is plotted at its actual time to maturity.</li>
+      <li><b>CNBC</b> quotes eight benchmark gilts (2, 5, 10, 15, 20, 30, 40 and 50 years) and says which gilt each one is. This page asks CNBC directly each time you refresh, so these points are as live as CNBC's own page. Each is plotted at its actual time to maturity.</li>
       <li><b>MarketWatch</b> (Tullett Prebon prices) covers 17 maturities from 1 to 50 years. Its quotes can't be read straight from a web page, so a GitHub job (<code>live-quotes.yml</code>) collects them every 5 minutes on weekdays during UK market hours. MarketWatch's own labels for the underlying gilts are out of date. So the job identifies each one as the gilt whose price/yield maths reproduces MarketWatch's price and yield together, and plots it at that gilt's real maturity. If one can't be identified, it's plotted at its nominal maturity (e.g. 10 years). GitHub can be slow to start the job each morning; the status line shows when the quotes were last collected, and gives a link to start the job by hand if it seems to have stopped.</li>
       <li><b>The curve</b> runs smoothly through the MarketWatch points (monotone cubic interpolation, so it never overshoots between them). If MarketWatch isn't available it runs through CNBC's points. These are gross redemption yields on coupon-paying gilts, not the Bank of England's zero-coupon curve shown in the Gilt Yield Explorer.</li>
       <li><b>All gilts at last daily close</b> are the yields in your daily <code>gilt_latest.json</code> update for every conventional gilt.</li>
@@ -129,7 +129,9 @@ const REPO = (() => {
   return m && seg ? `${m[1]}/${seg}` : "richardcooper715-rgb/gilt-yield-explorer";
 })();
 const LIVE_URL = `https://raw.githubusercontent.com/${REPO}/live-data/live_gilts.json`;
-const CNBC_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=UK1Y|UK2Y|UK3Y|UK5Y|UK7Y|UK10Y|UK15Y|UK20Y|UK30Y|UK40Y|UK50Y&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json";
+/* CNBC's symbols aren't consistent: UK2Y...UK50Y, but GB15Y and GB20Y. Unknown symbols are simply not returned. */
+const cnTenor = r => { const m = /(\d+)Y$/.exec(String(r.symbol||"")); return m ? +m[1] : null; };
+const CNBC_URL = "https://quote.cnbc.com/quote-html-webservice/restQuote/symbolType/symbol?symbols=UK2Y|UK5Y|UK10Y|UK30Y|UK40Y|UK50Y|GB15Y|GB20Y|GB1Y|GB3Y|GB4Y|GB6Y|GB7Y|GB8Y|GB9Y|GB12Y|GB25Y&requestMethod=itv&noform=1&partnerId=2&fund=1&exthrs=1&output=json";
 
 const D = { mw:null, mwFetched:null, cnbc:null, cnbcLive:false, cnbcErr:null, mwErr:null, close:null, closeDate:null };
 const pct = s => { const v = parseFloat(String(s??"").replace(/[%+]/g,"")); return isFinite(v) ? v : null; };
@@ -239,7 +241,7 @@ function renderStatus(){
 }
 function bench(tenorYears){
   // best available quote for a tenor: CNBC (live) first, else MarketWatch
-  const c = (D.cnbc||[]).find(r => r.symbol===`UK${tenorYears}Y`);
+  const c = (D.cnbc||[]).find(r => cnTenor(r)===tenorYears);
   if(c) return { y:c.yield, chg:c.change, src:"CNBC" };
   const m = (D.mw||[]).find(r => r.years===tenorYears);
   return m ? { y:m.yield, chg:m.change, src:"MarketWatch" } : null;
@@ -317,10 +319,10 @@ function renderChart(){
     hit(cx, cy, `<b>MarketWatch ${r.years}-year</b>${r.maturity_date?`<div class="muted">${r.coupon}% Treasury ${fmtMat(r.maturity_date)}</div>`:""}<div class="row"><span>Yield</span><span>${r.yield.toFixed(3)}%</span></div><div class="row"><span>Today</span><span>${bp(r.change)}</span></div>${r.price!=null?`<div class="row"><span>Price</span><span>${r.price.toFixed(3)}</span></div>`:""}<div class="row"><span>Time</span><span>${esc((r.time_uk||"").slice(11,16))} UK</span></div>`); }
   for(const r of cn){ const cx = X(r.x), cy = Y(r.yield);
     el("path",{d:`M${cx},${cy-6}L${cx+6},${cy}L${cx},${cy+6}L${cx-6},${cy}Z`,fill:"var(--s2)",stroke:"var(--surface)","stroke-width":1.5},svg);
-    hit(cx, cy, `<b>CNBC ${esc(r.symbol.replace("UK",""))}</b><div class="muted">${r.coupon!=null?r.coupon+"% ":""}Treasury ${fmtMat(r.maturity_date)}</div><div class="row"><span>Yield</span><span>${r.yield.toFixed(3)}%</span></div><div class="row"><span>Today</span><span>${bp(r.change)}</span></div>${r.price!=null?`<div class="row"><span>Price</span><span>${r.price.toFixed(3)}</span></div>`:""}<div class="row"><span>Time</span><span>${ukTime(r.time)} UK</span></div>`); }
+    hit(cx, cy, `<b>CNBC ${cnTenor(r)}-year</b><div class="muted">${r.coupon!=null?r.coupon+"% ":""}Treasury ${fmtMat(r.maturity_date)}</div><div class="row"><span>Yield</span><span>${r.yield.toFixed(3)}%</span></div><div class="row"><span>Today</span><span>${bp(r.change)}</span></div>${r.price!=null?`<div class="row"><span>Price</span><span>${r.price.toFixed(3)}</span></div>`:""}<div class="row"><span>Time</span><span>${ukTime(r.time)} UK</span></div>`); }
   for(const c of close){ hit(X(c.years), Y(c.yield), `<b>${esc(c.name)}</b><div class="row"><span>Yield at close</span><span>${c.yield.toFixed(3)}%</span></div><div class="row"><span>Close of</span><span>${esc(c.date)}</span></div>`); }
   // direct labels on a few CNBC points (selective, not every point)
-  for(const r of cn.filter(r => ["UK2Y","UK10Y","UK30Y"].includes(r.symbol))) el("text",{x:X(r.x),y:Y(r.yield)-10,"text-anchor":"middle"},svg).textContent = r.yield.toFixed(2)+"%";
+  for(const r of cn.filter(r => [2,10,30].includes(cnTenor(r)))) el("text",{x:X(r.x),y:Y(r.yield)-10,"text-anchor":"middle"},svg).textContent = r.yield.toFixed(2)+"%";
   // legend
   const lg = [];
   if(D.mw) lg.push(`<span><svg width="22" height="10"><line x1="0" y1="5" x2="22" y2="5" stroke="var(--s1)" stroke-width="2"/><circle cx="11" cy="5" r="3.5" fill="var(--s1)"/></svg>MarketWatch now (curve)</span>`);
@@ -330,9 +332,9 @@ function renderChart(){
   $("#legend").innerHTML = lg.join("");
 }
 function renderTable(){
-  const tenors = [...new Set([...(D.mw||[]).map(r=>r.years), ...(D.cnbc||[]).map(r=>+String(r.symbol).replace(/\D/g,""))])].sort((a,b)=>a-b);
+  const tenors = [...new Set([...(D.mw||[]).map(r=>r.years), ...(D.cnbc||[]).map(cnTenor).filter(n => n!=null)])].sort((a,b)=>a-b);
   const rows = tenors.map(n => {
-    const m = (D.mw||[]).find(r => r.years===n), c = (D.cnbc||[]).find(r => r.symbol===`UK${n}Y`);
+    const m = (D.mw||[]).find(r => r.years===n), c = (D.cnbc||[]).find(r => cnTenor(r)===n);
     return `<tr><td>${n}-year${m&&m.maturity_date?`<div class="sub2">MW: ${m.coupon}% ${fmtMat(m.maturity_date)}</div>`:""}</td>
       <td>${m?m.yield.toFixed(3)+"%":"<span class='muted'>–</span>"}</td><td class="${m?chgCls(m.change):""}">${m?bp(m.change):""}</td><td>${m&&m.price!=null?m.price.toFixed(3):""}</td>
       <td class="l">${c?`${c.coupon!=null?c.coupon+"% ":""}Treasury ${fmtMat(c.maturity_date)}`:""}</td>
