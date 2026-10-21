@@ -536,7 +536,10 @@ async function loadData(){
   }
   // pre-select first two securities (before building the list, so their
   // checkboxes are ticked and their groups start open)
-  state.data.securities.slice(0,2).forEach(s=>state.selected.add(s.isin));
+  // default selection: 4.875% Treasury 2036 and 0.875% Treasury 2046 (first two securities if either is missing)
+  const DEFAULT_ISINS = ['GB00BWBR1N39','GB00BNNGP775'];
+  const defaults = DEFAULT_ISINS.filter(i => state.data.securities.some(s=>s.isin===i));
+  (defaults.length ? defaults : state.data.securities.slice(0,2).map(s=>s.isin)).forEach(i=>state.selected.add(i));
   initSecListCollapseDefaults();
   buildSecurityList();
   buildMaturityOptions();
