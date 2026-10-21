@@ -1699,7 +1699,12 @@ def main():
 
     # --- HL daily gilt prices (security-level daily update, no manual
     # Tradeweb download needed) ---
-    if "hl-prices" in components:
+    if "hl-prices" in components and datetime.utcnow().weekday() >= 5:
+        # HL's pages still show Friday's prices at the weekend; saving them
+        # would record Friday's prices again under Saturday's/Sunday's date.
+        print("\n=== Skipping HL daily prices: it's the weekend, so HL is "
+              "still showing Friday's prices (already saved on Friday) ===")
+    elif "hl-prices" in components:
         print("\n=== Fetching Hargreaves Lansdown daily gilt prices ===")
         hl_data = fetch_hl_gilt_prices()
         if hl_data:
