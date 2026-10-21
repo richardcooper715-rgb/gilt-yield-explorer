@@ -1,36 +1,43 @@
 # Intraday benchmark gilt yields for gilt-live.html.
 #
-# Every 15 minutes on weekdays from 07:00 to 16:45 UTC (8am-5:45pm UK in
-# winter, 7am-4:45pm in summer -- GitHub's cron has no time zones) this runs
-# fetch_live.py and publishes live_gilts.json to the `live-data` branch.
+# GitHub's own timetable is unreliable on this repo: scheduled runs have
+# started hours late or been skipped. So instead of one short run every 15
+# minutes, a run stays alive through the market day and collects quotes every
+# 5 minutes until 16:50 UTC (fetch_live.py -> live_gilts.json on the
+# `live-data` branch). Before reaching GitHub's 6-hour job limit it starts a
+# fresh copy of itself (a workflow_dispatch, which GitHub runs straight away)
+# and hands over.
+#
+# The hourly schedule below is only there to get the day started. If GitHub
+# runs it late, collection simply starts late; if a run is already going, the
+# new one waits in the queue (see `concurrency`) and exits at once when its
+# turn comes. To start collecting by hand: Actions tab -> "Live gilt quotes"
+# -> Run workflow.
 #
 # The `live-data` branch only ever holds one commit (it's force-pushed each
-# time), so these frequent updates don't fill main's history or trigger a
-# GitHub Pages rebuild. gilt-live.html reads the file straight from
+# time), so these updates don't fill main's history or rebuild GitHub Pages.
+# gilt-live.html reads the file from
 # https://raw.githubusercontent.com/<owner>/<repo>/live-data/live_gilts.json
-#
-# GitHub sometimes starts scheduled runs late or skips them when it's busy;
-# the page always shows when the data was fetched. You can also run it by hand
-# from the Actions tab ("Live gilt quotes" -> Run workflow).
 
 name: Live gilt quotes
 
 on:
   schedule:
-    - cron: '*/15 7-16 * * 1-5'
+    - cron: '7 7-16 * * 1-5'   # hourly starter, weekdays (UTC)
   workflow_dispatch:
 
 permissions:
-  contents: write   # to push the live-data branch
+  contents: write   # push the live-data branch
+  actions: write    # start the next run at handover
 
 concurrency:
   group: live-quotes
-  cancel-in-progress: true
+  cancel-in-progress: false   # never stop a collecting run; newcomers wait their turn
 
 jobs:
-  snapshot:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 355
     steps:
       - name: Check out repo
         uses: actions/checkout@v6
@@ -40,18 +47,36 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Fetch quotes
+      - name: Collect quotes every 5 minutes until 16:50 UTC
+        id: loop
         run: |
           pip install --quiet requests
-          python fetch_live.py "$RUNNER_TEMP/live_gilts.json"
+          if [ "$(date -u +%u)" -gt 5 ]; then echo "Weekend: nothing to do."; exit 0; fi
+          END=$(date -u -d "16:50" +%s)
+          HANDOVER=$(( $(date +%s) + 330*60 ))   # hand over well inside the 6-hour limit
+          if [ "$(date +%s)" -ge "$END" ]; then echo "After 16:50 UTC: nothing to do."; exit 0; fi
 
-      - name: Publish to the live-data branch
-        run: |
+          # keep the script (and gilt_latest.json, used to identify MarketWatch's gilts) outside the work tree
+          mkdir -p "$RUNNER_TEMP/app" && cp fetch_live.py gilt_latest.json "$RUNNER_TEMP/app/"
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git checkout --quiet --orphan live-data-new
           git rm -rf --quiet .
-          cp "$RUNNER_TEMP/live_gilts.json" live_gilts.json
-          git add live_gilts.json
-          git commit --quiet -m "Live gilt quotes $(date -u +%Y-%m-%dT%H:%MZ)"
-          git push --quiet --force origin HEAD:live-data
+          first=1
+          while [ "$(date +%s)" -lt "$END" ] && [ "$(date +%s)" -lt "$HANDOVER" ]; do
+            if python "$RUNNER_TEMP/app/fetch_live.py" live_gilts.json; then
+              git add live_gilts.json
+              if [ $first -eq 1 ]; then git commit --quiet -m "Live gilt quotes"; first=0
+              else git commit --quiet --amend -m "Live gilt quotes"; fi
+              git push --quiet --force origin HEAD:live-data || echo "push failed, will retry next round"
+            fi
+            # sleep to the next 5-minute mark
+            now=$(date +%s); sleep $(( 300 - now % 300 + 5 ))
+          done
+          if [ "$(date +%s)" -lt "$END" ]; then echo "handover=yes" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Hand over to a fresh run
+        if: steps.loop.outputs.handover == 'yes'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/actions/workflows/live-quotes.yml/dispatches" -f ref=main

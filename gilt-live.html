@@ -29,7 +29,7 @@
   header h1{ font-family:Georgia,"Iowan Old Style","Palatino Linotype",serif; font-weight:600; font-size:22px; margin:0 0 4px; }
   header p{ margin:0; color:var(--ink-soft); font-size:13px; max-width:760px; }
   nav.apps{ margin-top:8px; font-size:13px; display:flex; flex-wrap:wrap; gap:4px 14px; }
-  nav.apps a{ color:var(--accent); }
+  nav.apps a, .status a{ color:var(--accent); }
   main{ padding:16px 24px 40px; max-width:1240px; }
   @media (max-width:600px){ header{padding:16px 16px 12px;} main{padding:12px 16px 32px;} }
   h3{ font-size:13px; text-transform:uppercase; letter-spacing:.06em; color:var(--ink-soft); margin:22px 0 8px; font-weight:600; }
@@ -104,7 +104,7 @@
   <details><summary>Where these numbers come from</summary>
     <ul>
       <li><b>CNBC</b> quotes six benchmark gilts (2, 5, 10, 30, 40 and 50 years) and says which gilt each one is. This page asks CNBC directly each time you refresh, so these points are as live as CNBC's own page. Each is plotted at its actual time to maturity.</li>
-      <li><b>MarketWatch</b> (Tullett Prebon prices) covers 17 maturities from 1 to 50 years. Its quotes can't be read straight from a web page, so a GitHub job (<code>live-quotes.yml</code>) collects them every 15 minutes on weekdays during UK market hours. MarketWatch's own labels for the underlying gilts are out of date. So the job identifies each one as the gilt whose price/yield maths reproduces MarketWatch's price and yield together, and plots it at that gilt's real maturity. If one can't be identified, it's plotted at its nominal maturity (e.g. 10 years). GitHub sometimes runs these jobs late, and the status line shows when they were last collected.</li>
+      <li><b>MarketWatch</b> (Tullett Prebon prices) covers 17 maturities from 1 to 50 years. Its quotes can't be read straight from a web page, so a GitHub job (<code>live-quotes.yml</code>) collects them every 5 minutes on weekdays during UK market hours. MarketWatch's own labels for the underlying gilts are out of date. So the job identifies each one as the gilt whose price/yield maths reproduces MarketWatch's price and yield together, and plots it at that gilt's real maturity. If one can't be identified, it's plotted at its nominal maturity (e.g. 10 years). GitHub can be slow to start the job each morning; the status line shows when the quotes were last collected, and gives a link to start the job by hand if it seems to have stopped.</li>
       <li><b>The curve</b> runs smoothly through the MarketWatch points (monotone cubic interpolation, so it never overshoots between them). If MarketWatch isn't available it runs through CNBC's points. These are gross redemption yields on coupon-paying gilts, not the Bank of England's zero-coupon curve shown in the Gilt Yield Explorer.</li>
       <li><b>All gilts at last daily close</b> are the yields in your daily <code>gilt_latest.json</code> update for every conventional gilt.</li>
       <li>Both quote feeds are unofficial and free, so either could change or stop without notice. If one fails, the page shows the other.</li>
@@ -136,6 +136,15 @@ const pct = s => { const v = parseFloat(String(s??"").replace(/[%+]/g,"")); retu
 const mwX = r => r.maturity_date ? yearsTo(r.maturity_date) : r.years;   // actual maturity once the job has identified the gilt
 const yearsTo = iso => (Date.parse(iso+"T00:00:00Z") - Date.now())/DAY/365.25;
 const ukTime = iso => { try{ return new Date(iso).toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",timeZone:"Europe/London"}); }catch(e){ return ""; } };
+/* time, with the day added when it isn't today (UK) */
+const ukWhen = iso => { try{ const d = new Date(iso), o = {timeZone:"Europe/London"};
+  const day = x => x.toLocaleDateString("en-GB",{...o, year:"numeric", month:"2-digit", day:"2-digit"});
+  const t = ukTime(iso); if(day(d)===day(new Date())) return t;
+  const y = new Date(Date.now()-DAY); return (day(d)===day(y) ? "yesterday " : d.toLocaleDateString("en-GB",{...o, weekday:"short", day:"numeric", month:"short"})+" ") + t; }catch(e){ return ""; } };
+/* UK market roughly open (weekday, 08:00-16:30 London time)? */
+const marketOpen = () => { const p = Object.fromEntries(new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/London",weekday:"short",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(new Date()).map(x=>[x.type,x.value]));
+  const mins = +p.hour*60 + +p.minute; return !["Sat","Sun"].includes(p.weekday) && mins >= 8*60+20 && mins <= 16*60+30; };
+const ACTIONS_URL = `https://github.com/${REPO}/actions/workflows/live-quotes.yml`;
 const ago = iso => { const m = Math.round((Date.now()-Date.parse(iso))/6e4); return m < 1 ? "just now" : m < 60 ? `${m} min ago` : m < 1440 ? `${Math.round(m/60)} h ago` : `${Math.round(m/1440)} days ago`; };
 const fmtMat = iso => { const d = new Date(iso+"T00:00:00Z"); return `${d.getUTCDate()} ${MON[d.getUTCMonth()]} ${d.getUTCFullYear()}`; };
 const bp = v => v==null ? "–" : `${v>0?"+":v<0?"−":""}${Math.abs(v*100).toFixed(1)} bp`;
@@ -218,9 +227,12 @@ function render(){
 }
 function renderStatus(){
   const parts = [];
-  if(D.cnbc) parts.push(D.cnbcLive ? `CNBC: live, last trade ${ukTime(D.cnbc[0].time)} UK` : `CNBC: <span class="bad">live request failed (${esc(D.cnbcErr)})</span>, showing the copy collected ${ago(D.cnbcFromJob)}`);
+  if(D.cnbc) parts.push(D.cnbcLive ? `CNBC: live, last trade ${ukWhen(D.cnbc[0].time)} UK` : `CNBC: <span class="bad">live request failed (${esc(D.cnbcErr)})</span>, showing the copy collected ${ago(D.cnbcFromJob)}`);
   else parts.push(`CNBC: <span class="bad">unavailable (${esc(D.cnbcErr||"no data")})</span>`);
-  if(D.mw) parts.push(`MarketWatch: collected ${ukTime(D.mwFetched)} UK (${ago(D.mwFetched)})`);
+  if(D.mw){
+    const stale = marketOpen() && (Date.now()-Date.parse(D.mwFetched)) > 20*6e4;
+    parts.push(`MarketWatch: collected ${ukWhen(D.mwFetched)} UK (${ago(D.mwFetched)})` + (stale ? ` <span class="bad">— collection seems to have stopped.</span> <a href="${ACTIONS_URL}" target="_blank" rel="noopener">Start it on GitHub</a> (Run workflow)` : ""));
+  }
   else parts.push(`MarketWatch: <span class="bad">${esc(D.mwErr||"unavailable")}</span>`);
   parts.push(`page refreshed ${new Date().toLocaleTimeString("en-GB",{hour:"2-digit",minute:"2-digit",second:"2-digit",timeZone:"Europe/London"})}`);
   $("#status").innerHTML = parts.join(" · ");
