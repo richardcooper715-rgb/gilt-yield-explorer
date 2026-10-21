@@ -90,7 +90,7 @@
     </div>
   </div>
   <div class="status" id="status">Loading…</div>
-  <div class="tiles" id="tiles"></div>
+  <div id="tiles"></div>
 
   <div class="chartcard">
     <div class="title">Gilt yield curve</div>
@@ -247,15 +247,18 @@ function bench(tenorYears){
   return m ? { y:m.yield, chg:m.change, src:"MarketWatch" } : null;
 }
 function renderTiles(){
-  const t = [];
-  for(const n of [2,5,10,30,50]){
+  // row 1: benchmark yields; row 2: curve spreads (long minus short, in bp)
+  const yields = [], spreads = [];
+  for(const n of [2,5,10,20,30,50]){
     const b = bench(n); if(!b) continue;
-    t.push(`<div class="tile"><div class="k">${n}-year</div><div class="v">${b.y.toFixed(3)}%</div><div class="s ${chgCls(b.chg)}">${bp(b.chg)} today</div></div>`);
+    yields.push(`<div class="tile"><div class="k">${n}-year</div><div class="v">${b.y.toFixed(3)}%</div><div class="s ${chgCls(b.chg)}">${bp(b.chg)} today</div></div>`);
   }
-  const b2 = bench(2), b10 = bench(10), b30 = bench(30);
-  if(b2 && b10) t.push(`<div class="tile"><div class="k">10y − 2y spread</div><div class="v">${((b10.y-b2.y)*100).toFixed(0)} bp</div><div class="s">${b10.chg!=null&&b2.chg!=null?bp(b10.chg-b2.chg)+" today":""}</div></div>`);
-  if(b10 && b30) t.push(`<div class="tile"><div class="k">30y − 10y spread</div><div class="v">${((b30.y-b10.y)*100).toFixed(0)} bp</div><div class="s">${b30.chg!=null&&b10.chg!=null?bp(b30.chg-b10.chg)+" today":""}</div></div>`);
-  $("#tiles").innerHTML = t.join("");
+  const signed = v => `${v>0.5?"+":v<-0.5?"−":""}${Math.abs(v).toFixed(0)} bp`;
+  for(const [lo, hi] of [[2,10],[10,20],[20,30],[30,50]]){
+    const a = bench(lo), b = bench(hi); if(!a || !b) continue;
+    spreads.push(`<div class="tile"><div class="k">${hi}y − ${lo}y spread</div><div class="v">${signed((b.y-a.y)*100)}</div><div class="s">${b.chg!=null&&a.chg!=null?bp(b.chg-a.chg)+" today":""}</div></div>`);
+  }
+  $("#tiles").innerHTML = `<div class="tiles">${yields.join("")}</div>${spreads.length?`<div class="tiles">${spreads.join("")}</div>`:""}`;
 }
 
 const NS = "http://www.w3.org/2000/svg";
