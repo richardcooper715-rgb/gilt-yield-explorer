@@ -1225,6 +1225,76 @@ def _next_business_day(d):
     return d
 
 
+UK_BANK_HOLIDAYS_URL = "https://www.gov.uk/bank-holidays.json"
+
+
+def _easter_sunday(year):
+    """Gregorian Easter Sunday (anonymous Gregorian algorithm)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return date(year, month, day)
+
+
+def _rule_based_bank_holidays(year):
+    """England & Wales bank holidays from the standard rules (used only if
+    gov.uk can't be reached -- it misses one-off holidays such as coronations)."""
+    def first_monday(y, m):
+        d = date(y, m, 1)
+        return d + timedelta(days=(7 - d.weekday()) % 7)
+
+    def last_monday(y, m):
+        d = date(y, m + 1, 1) - timedelta(days=1)
+        return d - timedelta(days=d.weekday())
+
+    hols = {}
+    ny = date(year, 1, 1)
+    hols[ny + timedelta(days={5: 2, 6: 1}.get(ny.weekday(), 0))] = "New Year's Day"
+    easter = _easter_sunday(year)
+    hols[easter - timedelta(days=2)] = "Good Friday"
+    hols[easter + timedelta(days=1)] = "Easter Monday"
+    hols[first_monday(year, 5)] = "Early May bank holiday"
+    hols[last_monday(year, 5)] = "Spring bank holiday"
+    hols[last_monday(year, 8)] = "Summer bank holiday"
+    xmas = date(year, 12, 25)
+    wd = xmas.weekday()
+    if wd == 5:      # Saturday: both move to Mon/Tue
+        hols[date(year, 12, 27)], hols[date(year, 12, 28)] = "Christmas Day (substitute)", "Boxing Day (substitute)"
+    elif wd == 6:    # Sunday: Boxing Day stays Monday, Christmas moves to Tuesday
+        hols[date(year, 12, 26)], hols[date(year, 12, 27)] = "Boxing Day", "Christmas Day (substitute)"
+    elif wd == 4:    # Friday: Boxing Day (Saturday) moves to Monday
+        hols[xmas], hols[date(year, 12, 28)] = "Christmas Day", "Boxing Day (substitute)"
+    else:
+        hols[xmas], hols[date(year, 12, 26)] = "Christmas Day", "Boxing Day"
+    return hols
+
+
+def uk_bank_holiday(d):
+    """Name of the England & Wales bank holiday falling on date d, or None.
+    The gilt market is shut on these days, so HL keeps showing the previous
+    day's prices. Uses gov.uk's official list, falling back to the rules."""
+    try:
+        resp = requests.get(UK_BANK_HOLIDAYS_URL, headers=HEADERS, timeout=20)
+        resp.raise_for_status()
+        events = resp.json()["england-and-wales"]["events"]
+        listed_years = {e["date"][:4] for e in events}
+        if str(d.year) in listed_years:
+            for e in events:
+                if e["date"] == d.isoformat():
+                    return e["title"]
+            return None
+    except Exception as e:  # noqa: BLE001
+        print(f"  (couldn't read gov.uk bank holidays -- {e} -- using the standard rules instead)")
+    return _rule_based_bank_holidays(d.year).get(d)
+
+
 def _business_days_before(d, n):
     while n > 0:
         d -= timedelta(days=1)
@@ -1699,11 +1769,17 @@ def main():
 
     # --- HL daily gilt prices (security-level daily update, no manual
     # Tradeweb download needed) ---
-    if "hl-prices" in components and datetime.utcnow().weekday() >= 5:
+    run_day = datetime.utcnow().date()
+    holiday = uk_bank_holiday(run_day) if "hl-prices" in components and run_day.weekday() < 5 else None
+    if "hl-prices" in components and run_day.weekday() >= 5:
         # HL's pages still show Friday's prices at the weekend; saving them
         # would record Friday's prices again under Saturday's/Sunday's date.
         print("\n=== Skipping HL daily prices: it's the weekend, so HL is "
               "still showing Friday's prices (already saved on Friday) ===")
+    elif holiday:
+        # Same on bank holidays: the market is shut and HL shows the last trading day's prices.
+        print(f"\n=== Skipping HL daily prices: today is a UK bank holiday ({holiday}), "
+              f"so HL is still showing the last trading day's prices ===")
     elif "hl-prices" in components:
         print("\n=== Fetching Hargreaves Lansdown daily gilt prices ===")
         hl_data = fetch_hl_gilt_prices()
