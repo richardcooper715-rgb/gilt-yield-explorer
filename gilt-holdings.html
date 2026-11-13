@@ -839,8 +839,52 @@ function renderOverview(){
       <thead><tr><th class="l">Gilt</th><th>Nominal held</th><th>Net invested</th><th>Income</th><th>Value now</th>${colHead}</tr></thead>
       <tbody>${body}</tbody></table></div>
     <p class="note">Click a gilt to see its price history and trades. Highlighted columns are the figures from the yellow cells in your spreadsheet. ${valuationNote()}</p>
+    ${explorerSection()}
     ${methodNote()}`;
   el.querySelectorAll("tr[data-sec]").forEach(tr => tr.onclick = () => { S.settings.detailSec = tr.dataset.sec; persist(); setTab("detail"); });
+  const xo = $("#x-open"), xs = $("#x-save");
+  if(xo) xo.onclick = () => {
+    const p = explorerPortfolio();
+    try{ localStorage.setItem(EXPLORER_KEY, JSON.stringify(p)); }
+    catch(e){ alert("Couldn't save to this browser's storage. Use “Save Explorer file” instead."); return; }
+    location.href = "gilt-yield-explorer.html#portfolio";
+  };
+  if(xs) xs.onclick = () => {
+    const p = explorerPortfolio();
+    const slug = p.name.toLowerCase().replace(/[^a-z0-9]+/g,"_").replace(/^_|_$/g,"") || "gilts";
+    download(`${slug}_portfolio.json`, JSON.stringify(p, null, 2), "application/json");
+  };
+}
+
+/* ---------- hand-off to the Gilt Yield Explorer ----------
+   The Explorer's portfolio is a list of {isin, units} (units = £ nominal). Both
+   apps are served from the same site, so "Open in Gilt Yield Explorer" writes the
+   key the Explorer reads on start-up; "Save Explorer file" gives the same thing as
+   a *_portfolio.json file for the Explorer's "Load portfolio" buttons on another device. */
+const EXPLORER_KEY = "gilt-explorer-portfolio-v1";
+function explorerPortfolio(){
+  const who = S.settings.holder==="all" ? "Everyone" : S.settings.holder;
+  const by = new Map();
+  for(const h of filtered()){
+    const q = qtyAt(h, Infinity);           // currently held, whatever the valuation date
+    if(!q || !h.gilt) continue;
+    const e = by.get(h.gilt.isin) || { isin:h.gilt.isin, units:0, mat:h.gilt.mat };
+    e.units += q; by.set(h.gilt.isin, e);
+  }
+  const holdings = [...by.values()].sort((a,b)=>a.mat-b.mat).map(e => ({ isin:e.isin, units:Math.round(e.units*100)/100 }));
+  const today = new Date().toISOString().slice(0,10);
+  return { name: who==="Everyone" ? "Family gilts" : `${who} gilts`, saved: today,
+           source: `Gilt Holdings (${who})`, sent: fmtDate(isoToDn(today)), holdings };
+}
+function explorerSection(){
+  const who = S.settings.holder==="all" ? "everyone" : S.settings.holder;
+  const p = explorerPortfolio();
+  const unmatched = filtered().filter(h => !h.gilt && qtyAt(h, Infinity) > 0);
+  if(!p.holdings.length) return "";
+  return `<details open><summary>Use these holdings in the Gilt Yield Explorer</summary>
+    <p>Sends the gilts currently held by ${esc(who)} (${p.holdings.length} gilt${p.holdings.length===1?"":"s"}, ${fmtNum(p.holdings.reduce((t,x)=>t+x.units,0))} nominal in all) to the Explorer's Portfolio tab, where you can see their cashflows and summary. Holdings of the same gilt in different accounts are added together. Choose a family member above to send just theirs.${unmatched.length ? ` Not included, because they aren't in the market data: ${unmatched.map(h=>esc(h.secLabel)).join(", ")}.` : ""}</p>
+    <div class="controls"><button class="btn primary" id="x-open">Open in Gilt Yield Explorer</button><button class="btn" id="x-save">Save Explorer file</button></div>
+    <p>“Open” replaces the Explorer's portfolio on this device. “Save Explorer file” is for another device: load it there with the Explorer's “Load portfolio” buttons.</p></details>`;
 }
 function valuationNote(){
   return S.settings.basis==="dirty" ? "Holdings are valued at the market mid dirty price (including accrued interest)." : "Holdings are valued at the market mid clean price (excluding accrued interest), unless you've entered your own price on the Gilt detail tab.";

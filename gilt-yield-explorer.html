@@ -390,6 +390,7 @@
         <button class="btn btn-small" id="addPortfolioRowBtn" style="margin-top:6px;">+ Add gilt</button>
         <button class="btn btn-small" id="sortPortfolioBtn" style="margin-top:6px;">Sort by maturity</button>
         <div id="portfolio-summary" class="portfolio-note" style="font-weight:600;"></div>
+        <div id="portfolio-source" class="portfolio-note"></div>
         <div class="portfolio-note">Amounts are £ nominal held. Index-linked cashflows use DMO's published
           Reference Index formula against known RPI history, then the BoE implied-inflation (BEI) curve to
           project years beyond the latest published RPI print -- an approximation, not a settlement-grade figure.
@@ -530,6 +531,7 @@ async function loadData(){
       `${state.data.securities.length} securities, cutover ${state.data.cutover_date}.`;
   }catch(e){
     state.data = SAMPLE_DATA;
+    state.usingSample = true;   // don't overwrite the saved portfolio with sample-data ISINs
     document.getElementById('footer-note').textContent =
       'Showing SAMPLE data (gilt_yields.json not found alongside this file — run fetch_gilt_data.py '+
       'and place its output next to this HTML to see real DMO + BoE data).';
@@ -544,9 +546,49 @@ async function loadData(){
   buildSecurityList();
   buildMaturityOptions();
   initDateInputs();
-  if(state.data.securities.length) state.portfolio = [{isin: state.data.securities[0].isin, units: 100000}];
+  // portfolio: the one saved in this browser (last edited here, or sent from Gilt Holdings), else a starter row
+  const stored = loadPortfolioLocal();
+  if(stored && Array.isArray(stored.holdings) && stored.holdings.length){
+    const known = new Set(state.data.securities.map(s=>s.isin));
+    state.portfolio = stored.holdings.filter(h=>known.has(h.isin)).map(h=>({isin:h.isin, units:+h.units||0}));
+    if(stored.name) document.getElementById('portfolioName').value = stored.name;
+    showPortfolioSource(stored);
+  }else if(state.data.securities.length){
+    state.portfolio = [{isin: state.data.securities[0].isin, units: 100000}];
+  }
   renderPortfolioEditor();
   render();
+  // gilt-holdings.html opens this page at #portfolio after sending its holdings
+  if(location.hash === '#portfolio'){
+    const tab = document.querySelector('.view-tab[data-view="portfolio"]');
+    if(tab) tab.click();
+  }
+}
+
+// ---- portfolio kept in this browser ------------------------------------
+// Shared key: gilt-holdings.html writes the same key ("Open in Gilt Yield Explorer").
+const PORTFOLIO_KEY = 'gilt-explorer-portfolio-v1';
+function loadPortfolioLocal(){
+  try{ return JSON.parse(localStorage.getItem(PORTFOLIO_KEY) || 'null'); }catch(e){ return null; }
+}
+function savePortfolioLocal(){
+  if(!state.data || state.usingSample) return;
+  const prev = loadPortfolioLocal() || {};
+  const payload = {
+    name: (document.getElementById('portfolioName').value||'').trim(),
+    saved: new Date().toISOString().slice(0,10),
+    holdings: state.portfolio.map(r=>({ isin:r.isin, units:r.units })),
+    source: prev.source || null,
+    sent: prev.sent || null
+  };
+  try{ localStorage.setItem(PORTFOLIO_KEY, JSON.stringify(payload)); }catch(e){}
+}
+function showPortfolioSource(p){
+  const el = document.getElementById('portfolio-source');
+  if(!el) return;
+  el.textContent = p && p.source
+    ? `Holdings sent from ${p.source}${p.sent ? ' on '+p.sent : ''}. Any changes you make here are kept in this browser.`
+    : 'This portfolio is kept in this browser, so it will still be here next time you open the app.';
 }
 
 // ---- security list: grouping, collapsing, search ---------------------
@@ -1119,6 +1161,7 @@ function computePortfolioSummary(){
 }
 
 function renderPortfolioSummary(){
+  savePortfolioLocal();
   const s = computePortfolioSummary();
   const fmt = v => '£'+v.toLocaleString(undefined,{maximumFractionDigits:0});
   document.getElementById('portfolio-summary').innerHTML =
@@ -1179,6 +1222,7 @@ document.getElementById('sortPortfolioBtn').addEventListener('click', ()=>{
   });
   renderPortfolioEditor();
 });
+document.getElementById('portfolioName').addEventListener('input', savePortfolioLocal);
 document.getElementById('cashflowTerms').addEventListener('change', render);
 document.getElementById('cashflowColorMode').addEventListener('change', render);
 
@@ -1211,6 +1255,9 @@ function applyLoadedPortfolioJson(text){
   const missing = holdings.filter(h=>!known.has(h.isin));
   state.portfolio = holdings.filter(h=>known.has(h.isin)).map(h=>({isin:h.isin, units:+h.units||0}));
   if(parsed.name) document.getElementById('portfolioName').value = parsed.name;
+  // a loaded file replaces whatever was kept before, including where it came from
+  try{ localStorage.setItem(PORTFOLIO_KEY, JSON.stringify({ name:parsed.name||'', saved:parsed.saved||'', holdings:[], source: parsed.source || null, sent: parsed.sent || null })); }catch(e){}
+  showPortfolioSource({ source: parsed.source, sent: parsed.sent });
   renderPortfolioEditor();
   render();
   if(missing.length){
