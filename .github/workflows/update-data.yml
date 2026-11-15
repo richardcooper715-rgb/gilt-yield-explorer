@@ -68,6 +68,10 @@ on:
         description: "One-off clean-up: comma-separated YYYY-MM-DD dates to delete from every security (leave blank normally)"
         required: false
         default: ''
+      purge_points:
+        description: "One-off clean-up: comma-separated ISIN:YYYY-MM-DD pairs, to delete one gilt's price on one date (leave blank normally)"
+        required: false
+        default: ''
 
 permissions:
   contents: write   # needed so the workflow can push the updated file
@@ -99,6 +103,9 @@ jobs:
             ARGS="--only ${{ github.event.inputs.only }}"
             if [ -n "${{ github.event.inputs.purge_dates }}" ]; then
               ARGS="$ARGS --purge-dates ${{ github.event.inputs.purge_dates }}"
+            fi
+            if [ -n "${{ github.event.inputs.purge_points }}" ]; then
+              ARGS="$ARGS --purge-points ${{ github.event.inputs.purge_points }}"
             fi
           elif [ "${{ github.event_name }}" = "push" ]; then
             ARGS="--only tradeweb"   # a new export was uploaded -- just parse it

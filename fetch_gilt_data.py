@@ -1662,6 +1662,12 @@ def main():
               "security's series before anything else runs -- a one-off "
               "clean-up for points saved under a wrong date, e.g. "
               "--purge-dates 2026-02-10,2026-05-10 --only tradeweb"))
+    parser.add_argument(
+        "--purge-points", default="",
+        help=("Comma-separated ISIN:YYYY-MM-DD pairs to DELETE -- one gilt's "
+              "price on one date, for a single bad point when other gilts' "
+              "prices on that date are fine, e.g. "
+              "--purge-points GB00BLBDX619:2021-12-31 --only tradeweb"))
     args = parser.parse_args()
 
     valid = {"dmo", "boe-archive", "boe-latest", "rpi", "il-ratios",
@@ -1689,6 +1695,21 @@ def main():
             sec["series"] = [p for p in sec.get("series", []) if p["date"] not in bad]
             removed += before - len(sec["series"])
         print(f"=== Purged {removed} points dated {sorted(bad)} ===")
+
+    if args.purge_points and previous:
+        wanted = set()
+        for item in args.purge_points.split(","):
+            isin, _, day = item.strip().partition(":")
+            if isin and day:
+                wanted.add((isin.strip(), day.strip()))
+        removed = 0
+        for sec in previous.get("securities", []):
+            if not any(isin == sec.get("isin") for isin, _ in wanted):
+                continue
+            before = len(sec.get("series", []))
+            sec["series"] = [p for p in sec.get("series", []) if (sec["isin"], p["date"]) not in wanted]
+            removed += before - len(sec["series"])
+        print(f"=== Purged {removed} single points {sorted(wanted)} ===")
 
     # --- securities (DMO) ---
     if "dmo" in components:
