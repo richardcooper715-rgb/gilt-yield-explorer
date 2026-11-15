@@ -262,6 +262,8 @@
           <select id="fieldSelect">
             <option value="yield">Yield</option>
             <option value="dirty_price">Dirty price</option>
+            <option value="tr_index">Total return index (start = 100)</option>
+            <option value="tr_annual">Annualised total return</option>
           </select>
         </label>
         <label class="toggle">
@@ -1450,6 +1452,108 @@ function attachMaturityHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, series,
   hit.addEventListener('touchmove', evt=>{ if(evt.touches[0]) handleMove(evt.touches[0]); }, {passive:true});
 }
 
+// ---- total return ------------------------------------------------------
+// Total return index: each day's return is the change in CLEAN price plus one
+// day's coupon (coupon_pct x days/365), reinvested daily -- i.e. coupons are
+// treated as paid every day rather than every six months. Using the clean
+// price sidesteps the ex-dividend price drop. For index-linked gilts the
+// coupon and accrued interest are scaled by the index ratio (dirty_price is
+// already in nominal, index-ratio-adjusted terms).
+const TR_DAY = 86400000;
+const isoMs = s => Date.parse(s+"T00:00:00Z");
+function addMonthsMs(ms, n){
+  const d = new Date(ms), day = d.getUTCDate();
+  d.setUTCDate(1); d.setUTCMonth(d.getUTCMonth()+n);
+  const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth()+1, 0)).getUTCDate();
+  d.setUTCDate(Math.min(day, last)); return +d;
+}
+const isWeekendMs = ms => { const w = new Date(ms).getUTCDay(); return w===0 || w===6; };
+function nextBizMs(ms){ let r = ms+TR_DAY; while(isWeekendMs(r)) r += TR_DAY; return r; }
+function bizDaysBeforeMs(ms, n){ let r = ms; while(n>0){ r -= TR_DAY; if(!isWeekendMs(r)) n--; } return r; }
+// Accrued interest per 100 (real terms for linkers) for a trade on dateStr,
+// settling next business day: cum-dividend, and the (negative) ex-dividend
+// figure when settlement falls in the 7-business-day ex-dividend period.
+function accruedBoth(couponPct, redemptionDate, dateStr){
+  const settle = nextBizMs(isoMs(dateStr)), mat = isoMs(redemptionDate);
+  if(!couponPct || settle >= mat) return {cum:0, ex:null};
+  let next = mat; while(addMonthsMs(next,-6) > settle) next = addMonthsMs(next,-6);
+  const last = addMonthsMs(next,-6), period = next-last, half = couponPct/2;
+  return { cum: half*(settle-last)/period,
+           ex: settle >= bizDaysBeforeMs(next,7) ? -half*(next-settle)/period : null };
+}
+// Clean price per 100 implied by a gross redemption yield (conventional gilt,
+// semi-annual, DMO conventions incl. the ex-dividend period).
+function cleanFromYield(couponPct, redemptionDate, yieldPct, dateStr){
+  const settle = nextBizMs(isoMs(dateStr)), mat = isoMs(redemptionDate);
+  let next = mat; while(addMonthsMs(next,-6) > settle) next = addMonthsMs(next,-6);
+  const last = addMonthsMs(next,-6), period = next-last, f = (next-settle)/period;
+  const exdiv = settle >= bizDaysBeforeMs(next,7), v = 1/(1+yieldPct/200), half = couponPct/2;
+  let pv = 0, k = 0;
+  while(addMonthsMs(next, 6*k) <= mat){ if(!(k===0 && exdiv)) pv += half*Math.pow(v, f+k); k++; }
+  pv += 100*Math.pow(v, f+k-1);
+  return pv - (exdiv ? -half*(next-settle)/period : half*(settle-last)/period);
+}
+// [{date, tr}] from the first price on/after cutoffMs, rebased to 100 there.
+function totalReturnSeries(sec, cutoffMs, ilCtx){
+  const il = /index/i.test(sec.type||'');
+  const cpn = sec.coupon_pct || 0;
+  const rows = [];
+  for(const p of sec.series){
+    if(p.dirty_price==null || isoMs(p.date) < cutoffMs) continue;
+    let ir = 1;
+    if(il){ ir = indexRatioForDate(sec, p.date, ilCtx.rpiMap, ilCtx.lastKnown, ilCtx.bei); if(!ir) continue; }
+    const ai = sec.redemption_date ? accruedBoth(cpn, sec.redemption_date, p.date) : {cum:0, ex:null};
+    // In the ex-dividend period, price sources differ: some dirty prices are
+    // already ex the coming coupon (DMO convention), HL-derived ones aren't.
+    // Conventional gilts: the price's own yield says which -- take the clean
+    // price closest to the one the yield implies. Linkers (real yields, some on
+    // the old 8-month indexation): decided below by continuity with the
+    // neighbouring days.
+    const cumClean = p.dirty_price - ai.cum*ir;
+    let clean = cumClean, cands = null;
+    if(ai.ex!=null){
+      const exClean = p.dirty_price - ai.ex*ir;
+      if(!il && p.yield!=null && sec.redemption_date){
+        const target = cleanFromYield(cpn, sec.redemption_date, p.yield, p.date);
+        clean = Math.abs(exClean-target) <= Math.abs(cumClean-target) ? exClean : cumClean;
+      }else cands = [cumClean, exClean];
+    }
+    rows.push({ date:p.date, ms:isoMs(p.date), ir, clean, cands, px:p.dirty_price });
+  }
+  // Drop isolated bad prices (e.g. a stray point more than 40% away from every
+  // neighbour) -- otherwise one bad print would distort the whole index.
+  // Genuine big moves (28 Sep 2022) are kept because the next day confirms them.
+  const off = (a, b) => b==null || a/b > 1.4 || a/b < 1/1.4;
+  for(let i = rows.length-1; i >= 0; i--){
+    const prevPx = i>0 ? rows[i-1].px : null, nextPx = i<rows.length-1 ? rows[i+1].px : null;
+    if((prevPx!=null || nextPx!=null) && off(rows[i].px, prevPx) && off(rows[i].px, nextPx)) rows.splice(i, 1);
+  }
+  const pick = (cands, ref) => cands.reduce((a,b)=> Math.abs(b-ref) < Math.abs(a-ref) ? b : a);
+  const out = []; let prev = null, tr = 100;
+  rows.forEach((r, i) => {
+    let clean = r.clean;
+    if(r.cands){
+      if(prev) clean = pick(r.cands, prev.clean);
+      else { const nxt = rows[i+1]; clean = nxt ? pick(r.cands, nxt.clean) : r.cands[1]; }
+    }
+    if(prev && prev.clean > 0){
+      const days = (r.ms - prev.ms)/TR_DAY;
+      tr *= 1 + (clean - prev.clean + cpn*r.ir*days/365)/prev.clean;
+    }
+    out.push({ date:r.date, tr }); prev = { clean, ms:r.ms };
+  });
+  return out;
+}
+// Annualised total return to each date (% a year), from the index. Very short
+// holding periods are left out: annualising a few days' return is just noise.
+function annualisedSeries(trs){
+  if(trs.length < 2) return [];
+  const t0 = isoMs(trs[0].date), span = (isoMs(trs[trs.length-1].date) - t0)/TR_DAY;
+  const minDays = Math.min(91, span/3);
+  return trs.filter(p => (isoMs(p.date)-t0)/TR_DAY >= minDays && (isoMs(p.date)-t0) > 0)
+    .map(p => ({ date:p.date, val: (Math.pow(p.tr/100, 365.25/((isoMs(p.date)-t0)/TR_DAY)) - 1)*100 }));
+}
+
 function renderTimeSeries(){
   const svg = document.getElementById('chart');
   const legend = document.getElementById('legend');
@@ -1468,9 +1572,11 @@ function renderTimeSeries(){
   // Anchor "trailing N months" to the most recent date across whatever
   // could be plotted, so the window always reflects the latest data --
   // not necessarily today's date.
+  const derived = field==='tr_index' || field==='tr_annual';
+  const srcField = derived ? 'dirty_price' : field;
   let rawDates = [];
   selectedSecs.forEach(s=> s.series.forEach(p=>{
-    if(p[field]!==undefined && p[field]!==null) rawDates.push(+new Date(p.date));
+    if(p[srcField]!==undefined && p[srcField]!==null) rawDates.push(+new Date(p.date));
   }));
   const overlayTypes = [];
   if(field==='yield' && showNom) overlayTypes.push(['nominal', COLORS[0], 'BoE nominal']);
@@ -1486,14 +1592,28 @@ function renderTimeSeries(){
     cutoff = monthsAgo(Math.max(...rawDates), periodMonths);
   }
 
+  // the plotted points for each security: a stored field, or a measure derived from dirty prices
+  const ilCtx = derived ? { rpiMap: rpiByMonthMap(state.data.rpi_history), lastKnown: latestKnownRpi(state.data.rpi_history), bei: latestInflationCurvePoints() } : null;
+  const plotted = new Map();
+  selectedSecs.forEach(s=>{
+    let pts;
+    if(derived){
+      const trs = totalReturnSeries(s, cutoff, ilCtx);
+      pts = field==='tr_index' ? trs.map(p=>({date:p.date, val:p.tr})) : annualisedSeries(trs);
+    }else{
+      pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff).map(p=>({date:p.date, val:p[field]}));
+    }
+    plotted.set(s.isin, pts);
+  });
+
   let allPoints = [];
   let tooltipSeries = [];
   selectedSecs.forEach(s=>{
-    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff);
-    pts.forEach(p=>allPoints.push({date:p.date, val:p[field]}));
+    const pts = plotted.get(s.isin);
+    pts.forEach(p=>allPoints.push({date:p.date, val:p.val}));
     if(pts.length){
       const color = secColor(s);
-      tooltipSeries.push({label:s.name, color, points: pts.map(p=>({t:+new Date(p.date), val:p[field]}))});
+      tooltipSeries.push({label:s.name, color, points: pts.map(p=>({t:+new Date(p.date), val:p.val}))});
     }
   });
   const overlayCurves = {};
@@ -1509,8 +1629,8 @@ function renderTimeSeries(){
   });
 
   if(!allPoints.length){
-    svg.innerHTML = emptyState(W,H, field==='dirty_price'
-      ? 'No dirty price data for the current selection (curve overlays only apply to yield).'
+    svg.innerHTML = emptyState(W,H, field!=='yield'
+      ? (field==='tr_annual' ? 'Not enough price history in this period to annualise a return (curve overlays only apply to yield).' : 'No dirty price data for the current selection (curve overlays only apply to yield).')
       : 'Select a security on the left, or enable a BoE curve overlay, to see the chart.');
     legend.innerHTML=''; return;
   }
@@ -1526,7 +1646,14 @@ function renderTimeSeries(){
   const y = v => M.top + plotH - (v-yLo)/(yHi-yLo||1) * plotH;
 
   let svgParts = [];
-  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>field==='yield' ? v.toFixed(1)+'%' : v.toFixed(2));
+  const pctField = field==='yield' || field==='tr_annual';
+  drawYAxis(svgParts, M, W, yLo, yHi, plotH, v=>pctField ? v.toFixed(1)+'%' : field==='tr_index' ? v.toFixed(1) : v.toFixed(2));
+  if(field==='tr_index' && yLo<100 && yHi>100){
+    svgParts.push(`<line x1="${M.left}" x2="${M.left+plotW}" y1="${y(100)}" y2="${y(100)}" stroke="#9a9a92" stroke-dasharray="4 3"/>`);
+  }
+  if(field==='tr_annual' && yLo<0 && yHi>0){
+    svgParts.push(`<line x1="${M.left}" x2="${M.left+plotW}" y1="${y(0)}" y2="${y(0)}" stroke="#9a9a92" stroke-dasharray="4 3"/>`);
+  }
   drawXAxisTime(svgParts, M, H, plotH, xMin, xMax, x, periodMonths);
 
   const cutoverT = +new Date(state.data.cutover_date);
@@ -1538,8 +1665,7 @@ function renderTimeSeries(){
 
   selectedSecs.forEach(s=>{
     const color = secColor(s);
-    const pts = s.series.filter(p=>p[field]!==undefined && p[field]!==null && +new Date(p.date)>=cutoff)
-      .map(p=>`${x(+new Date(p.date))},${y(p[field])}`).join(' ');
+    const pts = plotted.get(s.isin).map(p=>`${x(+new Date(p.date))},${y(p.val)}`).join(' ');
     if(pts) svgParts.push(`<polyline class="series-line" points="${pts}" stroke="${color}"/>`);
   });
 
@@ -1556,7 +1682,7 @@ function renderTimeSeries(){
 
   svg.innerHTML = svgParts.join('');
   attachHoverTooltip(svg, M, plotW, plotH, xMin, xMax, x, tooltipSeries,
-    v=>field==='yield' ? v.toFixed(3)+'%' : v.toFixed(3));
+    v=>field==='yield' ? v.toFixed(3)+'%' : field==='tr_annual' ? v.toFixed(2)+'% a year' : field==='tr_index' ? v.toFixed(2) : v.toFixed(3));
 
   let legendHtml = selectedSecs.map(s=>{
     const color = secColor(s);
@@ -1565,6 +1691,15 @@ function renderTimeSeries(){
   overlayTypes.forEach(([ct,color,label])=>{
     legendHtml += `<span class="legend-item"><span class="legend-swatch" style="background:${color};border-top:2px dotted ${color}"></span>${label} ${state.maturity}y (${overlayMeasure})</span>`;
   });
+  if(derived){
+    const starts = selectedSecs.map(s=>{ const p = plotted.get(s.isin); return p.length ? p[0].date : null; }).filter(Boolean);
+    const sameStart = starts.length && starts.every(d=>d===starts[0]);
+    legendHtml += `<div class="legend-note" style="flex-basis:100%;font-size:12px;color:var(--ink-soft);margin-top:4px">` +
+      (field==='tr_index'
+        ? `Total return with coupons reinvested, rebased to 100 at the start of the period${sameStart?` (${starts[0]})`:' (each gilt from its first price in the period)'}. `
+        : `Annualised total return from the start of the period${sameStart?'':' (each gilt from its first price in the period)'} to each date, coupons reinvested. The first part of the period is left out, because annualising a few days' return is just noise. `) +
+      `Coupons are treated as paid daily and reinvested, using the clean price${selectedSecs.some(s=>/index/i.test(s.type||''))?'; index-linked gilts include indexation':''}.</div>`;
+  }
   legend.innerHTML = legendHtml;
 }
 
